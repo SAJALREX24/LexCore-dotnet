@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lexcore-api
+    ports:
+      - "5000:5000"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=lexcore;Username=postgres;Password=${POSTGRES_PASSWORD}
+      - ConnectionStrings__Redis=redis:6379
+      - Jwt__Secret=${JWT_SECRET}
+      - Jwt__Issuer=LexCore
+      - Jwt__Audience=LexCoreUsers
+      - Email__SmtpHost=${EMAIL_SMTP_HOST}
+      - Email__SmtpPort=${EMAIL_SMTP_PORT}
+      - Email__SmtpUser=${EMAIL_SMTP_USER}
+      - Email__SmtpPassword=${EMAIL_SMTP_PASSWORD}
+      - Email__FromAddress=${EMAIL_FROM_ADDRESS}
+      - Email__FromName=LexCore
+      - Storage__UseLocal=${STORAGE_USE_LOCAL:-true}
+      - Storage__LocalPath=/app/uploads
+      - Storage__S3BucketName=${S3_BUCKET_NAME}
+      - Storage__S3AccessKey=${S3_ACCESS_KEY}
+      - Storage__S3SecretKey=${S3_SECRET_KEY}
+      - Storage__S3Region=${S3_REGION:-ap-south-1}
+      - Razorpay__TestMode=${RAZORPAY_TEST_MODE:-true}
+      - Razorpay__KeyId=${RAZORPAY_KEY_ID}
+      - Razorpay__KeySecret=${RAZORPAY_KEY_SECRET}
+      - Razorpay__WebhookSecret=${RAZORPAY_WEBHOOK_SECRET}
+      - App__BaseUrl=${APP_BASE_URL:-http://localhost:5000}
+      - Cors__AllowedOrigins=${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    volumes:
+      - lexcore-uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/swagger/index.html"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: lexcore-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=lexcore
+    volumes:
+      - lexcore-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lexcore"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: lexcore-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - lexcore-redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes
+
+volumes:
+  lexcore-postgres-data:
+  lexcore-redis-data:
+  lexcore-uploads:
