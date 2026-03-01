@@ -60,6 +60,10 @@ public static class ServiceCollectionExtensions
         // HTTP Client Factory
         services.AddHttpClient("Razorpay");
 
+        // HTTP Client Factory
+        services.AddHttpClient("Razorpay");
+        services.AddScoped<IAiService, AiService>();
+
         // FluentValidation
         services.AddValidatorsFromAssemblyContaining<RegisterFirmRequestValidator>();
 

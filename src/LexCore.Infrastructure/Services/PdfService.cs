@@ -15,7 +15,7 @@ public class PdfService : IPdfService
 
     public byte[] GenerateInvoicePdf(Invoice invoice, Firm firm, User client)
     {
-        var document = Document.Create(container =>
+        var document = QuestPDF.Fluent.Document.Create(container =>
         {
             container.Page(page =>
             {
@@ -62,7 +62,6 @@ public class PdfService : IPdfService
         {
             column.Spacing(15);
 
-            // Bill To Section
             column.Item().Row(row =>
             {
                 row.RelativeItem().Column(col =>
@@ -73,7 +72,6 @@ public class PdfService : IPdfService
                 });
             });
 
-            // Line Items Table
             column.Item().Table(table =>
             {
                 table.ColumnsDefinition(columns =>
@@ -88,13 +86,11 @@ public class PdfService : IPdfService
                     header.Cell().Background(Colors.Grey.Lighten3).Padding(5).AlignRight().Text("Amount").Bold();
                 });
 
-                // Main item
                 table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(5)
                     .Text(invoice.Description ?? "Legal Services");
                 table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(5)
                     .AlignRight().Text($"₹{invoice.Amount:N2}");
 
-                // Parse and display line items if any
                 if (!string.IsNullOrEmpty(invoice.LineItems))
                 {
                     var items = invoice.LineItems.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -106,7 +102,6 @@ public class PdfService : IPdfService
                 }
             });
 
-            // Totals
             column.Item().AlignRight().Width(200).Table(table =>
             {
                 table.ColumnsDefinition(columns =>
@@ -115,17 +110,16 @@ public class PdfService : IPdfService
                     columns.RelativeColumn();
                 });
 
-                table.Cell().Padding(3).Text("Subtotal:").AlignRight();
-                table.Cell().Padding(3).Text($"₹{invoice.Amount:N2}").AlignRight();
+                table.Cell().Padding(3).AlignRight().Text("Subtotal:");
+                table.Cell().Padding(3).AlignRight().Text($"₹{invoice.Amount:N2}");
 
-                table.Cell().Padding(3).Text("GST (18%):").AlignRight();
-                table.Cell().Padding(3).Text($"₹{invoice.GstAmount:N2}").AlignRight();
+                table.Cell().Padding(3).AlignRight().Text("GST (18%):");
+                table.Cell().Padding(3).AlignRight().Text($"₹{invoice.GstAmount:N2}");
 
-                table.Cell().Padding(3).Background(Colors.Blue.Lighten4).Text("Total:").Bold().AlignRight();
-                table.Cell().Padding(3).Background(Colors.Blue.Lighten4).Text($"₹{invoice.TotalAmount:N2}").Bold().AlignRight();
+                table.Cell().Padding(3).Background(Colors.Blue.Lighten4).AlignRight().Text("Total:").Bold();
+                table.Cell().Padding(3).Background(Colors.Blue.Lighten4).AlignRight().Text($"₹{invoice.TotalAmount:N2}").Bold();
             });
 
-            // Status
             column.Item().PaddingTop(20).Row(row =>
             {
                 var statusColor = invoice.Status.ToString() switch
@@ -134,11 +128,9 @@ public class PdfService : IPdfService
                     "Overdue" => Colors.Red.Darken1,
                     _ => Colors.Orange.Darken1
                 };
-
                 row.AutoItem().Text($"Status: {invoice.Status}").FontSize(12).Bold().FontColor(statusColor);
             });
 
-            // Notes
             column.Item().PaddingTop(20).Text("Payment Terms:").FontSize(9).Bold();
             column.Item().Text("Payment is due within 30 days of invoice date. Please include invoice number in payment reference.")
                 .FontSize(8).FontColor(Colors.Grey.Darken1);

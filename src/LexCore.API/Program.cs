@@ -1,8 +1,10 @@
+using Hangfire.Dashboard;
 using AspNetCoreRateLimit;
 using Hangfire;
 using LexCore.API.Extensions;
 using LexCore.API.Middleware;
 using LexCore.Infrastructure.Data;
+
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
