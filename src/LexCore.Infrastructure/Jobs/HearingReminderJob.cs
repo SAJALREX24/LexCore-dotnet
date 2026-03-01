@@ -62,7 +62,7 @@ public class HearingReminderJob
                 );
 
                 // Create notification
-                await CreateNotification(hearing.FirmId, lawyer.Id, caseInfo.Title, hearing);
+                await CreateNotification(hearing.FirmId!.Value, lawyer.Id, caseInfo.Title, hearing);
             }
 
             // Send to all assigned clients (without internal notes)
@@ -78,7 +78,7 @@ public class HearingReminderJob
                     hearing.CourtName ?? "Court"
                 );
 
-                await CreateNotification(hearing.FirmId, client.Id, caseInfo.Title, hearing);
+                await CreateNotification(hearing.FirmId!.Value, client.Id, caseInfo.Title, hearing);
             }
 
             // Mark reminder as sent

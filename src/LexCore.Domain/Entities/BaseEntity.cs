@@ -11,6 +11,6 @@ public abstract class BaseEntity
 
 public abstract class TenantEntity : BaseEntity
 {
-    public Guid FirmId { get; set; }
+    public Guid? FirmId { get; set; }
     public Firm? Firm { get; set; }
 }

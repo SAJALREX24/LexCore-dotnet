@@ -9,6 +9,9 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Listen on all interfaces so physical devices on the same WiFi can connect
+builder.WebHost.UseUrls("http://0.0.0.0:5000");
+
 // Add services
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

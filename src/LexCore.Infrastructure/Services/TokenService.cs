@@ -17,7 +17,7 @@ public class TokenService : ITokenService
         _configuration = configuration;
     }
 
-    public string GenerateAccessToken(Guid userId, Guid firmId, string email, string role, string name)
+    public string GenerateAccessToken(Guid userId, Guid? firmId, string email, string role, string name)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["Jwt:Secret"]!));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -27,7 +27,7 @@ public class TokenService : ITokenService
             new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, email),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim("firmId", firmId.ToString()),
+            new Claim("firmId", firmId?.ToString() ?? string.Empty),
             new Claim(ClaimTypes.Role, role),
             new Claim(ClaimTypes.Name, name)
         };

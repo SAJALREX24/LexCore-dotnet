@@ -36,7 +36,7 @@ public class DataSeeder
             var superAdmin = new User
             {
                 Id = Guid.NewGuid(),
-                FirmId = Guid.Empty,
+                FirmId = null,
                 Name = "Super Admin",
                 Email = "superadmin@lexcore.in",
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword("SuperAdmin@1234", 12),

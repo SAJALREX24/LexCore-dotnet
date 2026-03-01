@@ -25,26 +25,28 @@ public static class ServiceCollectionExtensions
         services.AddDbContext<AppDbContext>(options =>
             options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
 
-        // Redis
+      // Redis
         var redisConnection = configuration.GetConnectionString("Redis");
         if (!string.IsNullOrEmpty(redisConnection))
         {
-            services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(redisConnection));
+            try
+            {
+                var redisConfig = ConfigurationOptions.Parse(redisConnection);
+                redisConfig.AbortOnConnectFail = false;
+                services.AddSingleton<IConnectionMultiplexer>(
+                    ConnectionMultiplexer.Connect(redisConfig));
+            }
+            catch (Exception)
+            {
+                // Redis not available - running without cache
+            }
         }
 
-        // Hangfire
+      // Hangfire
         services.AddHangfire(config =>
         {
-            if (!string.IsNullOrEmpty(redisConnection))
-            {
-                config.UseRedisStorage(redisConnection);
-            }
-            else
-            {
-                config.UseInMemoryStorage();
-            }
+            config.UseInMemoryStorage();
         });
-        services.AddHangfireServer();
 
         // Services
         services.AddScoped<ITenantService, TenantService>();

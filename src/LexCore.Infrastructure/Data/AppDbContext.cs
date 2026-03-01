@@ -44,7 +44,7 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Email).IsRequired().HasMaxLength(256);
             entity.HasIndex(e => e.Email).IsUnique();
             entity.HasIndex(e => e.FirmId);
-            entity.HasOne(e => e.Firm).WithMany(f => f.Users).HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Firm).WithMany(f => f.Users).HasForeignKey(e => e.FirmId).IsRequired(false).OnDelete(DeleteBehavior.Cascade);
             entity.HasQueryFilter(e => e.DeletedAt == null);
         });
 

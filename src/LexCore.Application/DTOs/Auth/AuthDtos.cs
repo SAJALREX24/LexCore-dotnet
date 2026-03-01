@@ -96,7 +96,7 @@ public class UserDto
     public string Name { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string Role { get; set; } = string.Empty;
-    public Guid FirmId { get; set; }
+    public Guid? FirmId { get; set; }
     public string? FirmName { get; set; }
     public bool IsVerified { get; set; }
     public DateTime? LastLogin { get; set; }
