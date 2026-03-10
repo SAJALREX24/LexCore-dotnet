@@ -1,197 +1,55 @@
-# LexCore - Legal Practice Management System
+LexCore AI — Investor Brief
 
-A multi-tenant SaaS platform for Indian law firms to manage cases, clients, documents, hearings, billing, and team collaboration.
+🎯 The Problem
+India has 1.7 million lawyers. Most of them run their practice from a physical diary, WhatsApp, and memory.
+They miss limitation dates. They forget to follow up on fees. They walk into court unprepared. They lose cases — not because they are bad lawyers — but because they have no system.
+No software exists in India built specifically for the individual lawyer.
 
-## Tech Stack
+💡 What We're Building
+LexCore AI is a lawyer's digital chamber.
+One app that manages everything — cases, hearings, clients, billing, documents, and deadlines — with an AI layer that thinks like a senior lawyer.
+It doesn't just store data. It tells the lawyer what needs attention today, what money is uncollected, and what case is about to expire.
 
-- **Backend**: ASP.NET Core 8 Web API (C#)
-- **ORM**: Entity Framework Core 8 with PostgreSQL provider
-- **Database**: PostgreSQL 16
-- **Cache**: Redis 7
-- **Background Jobs**: Hangfire with Redis storage
-- **Authentication**: JWT Bearer tokens
-- **Email**: MailKit (SMTP)
-- **File Storage**: Local filesystem / AWS S3
-- **PDF Generation**: QuestPDF
-- **API Documentation**: Swagger
+🏗️ What's Built
+A production-ready full stack platform:
 
-## Quick Start
+📱 Flutter mobile app — Android + iOS from one codebase
+⚙️ .NET 8 REST API — Clean Architecture, JWT auth, multi-tenant
+🗄️ Entity Framework Core — 15+ table schema, fully migrated
+🔔 Intelligent notifications — FCM push + WhatsApp, triggered by limitation dates and overdue invoices
+📊 Practice Health Score — a single number that tells a lawyer how their practice is performing
+🤖 AI Assistant — case summaries, next steps, voice diary — powered initially by Gemini, migrating to a proprietary Indian Legal LLM
 
-### Prerequisites
 
-- Docker and Docker Compose
-- Git
+🤖 The AI Vision
+We are building India's first LLM trained specifically on Indian legal data —
 
-### Setup Instructions
+5 million+ Supreme Court and High Court judgements from Indian Kanoon
+Every Act and Amendment from legislative.gov.in
+Real anonymized case data from our own users over time
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd LexCore
-   ```
+A model that knows IPC, CrPC, CPC, limitation periods, and Indian court procedure natively — not as a general purpose AI that happens to know some law.
+This model becomes a moat no competitor can copy — and a licensable asset to every legal tech company in India.
 
-2. **Create environment file**
-   ```bash
-   cp .env.example .env
-   ```
+📈 The Market
 
-3. **Configure environment variables**
-   
-   Open `.env` and fill in the required values:
-   - `POSTGRES_PASSWORD` - Database password
-   - `JWT_SECRET` - Secret key for JWT (min 64 characters)
-   - `EMAIL_*` - Gmail SMTP settings (optional for dev)
+🇮🇳 1.7 million lawyers in India
+70%+ are individual practitioners with no practice management software
+Legal tech in India is grossly underserved — most solutions target large firms
+Target price point — ₹999 to ₹1,999/month per lawyer
+1% market penetration = ₹170 crore ARR
 
-4. **Start the application**
-   ```bash
-   docker compose up --build
-   ```
 
-5. **Access the API**
-   - Swagger UI: http://localhost:5000/swagger
-   - Hangfire Dashboard: http://localhost:5000/hangfire (requires SuperAdmin login)
+💡 Why This Wins
 
-### Default Users (Development)
+A lawyer who opens LexCore first thing every morning will never cancel.
 
-The database is automatically seeded with test users:
+We don't compete on features. We compete on anxiety reduction.
+Every senior lawyer has one fear — missing a limitation date, losing a client's trust, working for fees they never collect. LexCore eliminates all three. That is not a productivity tool. That is professional insurance.
 
-| Role | Email | Password |
-|------|-------|----------|
-| Super Admin | superadmin@lexcore.in | SuperAdmin@1234 |
-| Firm Admin | admin@lexcore.in | Admin@1234 |
-| Lawyer | lawyer@lexcore.in | Lawyer@1234 |
-| Client | client@lexcore.in | Client@1234 |
+🔐 The Moat
 
-### Running Migrations (Manual)
-
-If you need to run migrations manually:
-
-```bash
-# Install EF Core tools
-dotnet tool install --global dotnet-ef
-
-# Run from the API project directory
-cd src/LexCore.API
-dotnet ef migrations add InitialCreate --project ../LexCore.Infrastructure
-dotnet ef database update --project ../LexCore.Infrastructure
-```
-
-## API Modules
-
-### Authentication (`/api/auth`)
-- `POST /register-firm` - Register new firm + admin
-- `POST /login` - Login and get JWT token
-- `POST /refresh` - Refresh access token
-- `POST /logout` - Invalidate refresh token
-- `POST /forgot-password` - Request password reset
-- `POST /reset-password` - Reset password with token
-- `GET /verify-email` - Verify email address
-- `POST /invite` - Invite user to firm (FirmAdmin)
-- `POST /accept-invite` - Accept invitation
-
-### Users (`/api/users`)
-- `GET /` - List users in firm
-- `GET /{id}` - Get user details
-- `PATCH /{id}` - Update user
-- `DELETE /{id}` - Soft delete user
-
-### Firms (`/api/firms`)
-- `GET /me` - Get current firm
-- `PATCH /me` - Update firm details
-- `POST /me/logo` - Upload firm logo
-
-### Cases (`/api/cases`)
-- `POST /` - Create case
-- `GET /` - List cases (paginated, filterable)
-- `GET /{id}` - Get case details
-- `PATCH /{id}` - Update case
-- `PATCH /{id}/status` - Change case status
-- `DELETE /{id}` - Soft delete case
-- `POST /{id}/lawyers` - Assign lawyer
-- `DELETE /{id}/lawyers/{lawyerId}` - Remove lawyer
-- `POST /{id}/clients` - Assign client
-- `DELETE /{id}/clients/{clientId}` - Remove client
-- `GET /{id}/timeline` - Get case audit trail
-- `POST /{id}/notes` - Add case note
-
-### Documents (`/api/documents`)
-- `POST /upload` - Upload document
-- `GET /case/{caseId}` - List case documents
-- `GET /{id}/download` - Download document
-- `PATCH /{id}` - Update document metadata
-- `DELETE /{id}` - Soft delete document
-- `POST /{id}/version` - Upload new version
-- `GET /{id}/versions` - Get version history
-
-### Hearings (`/api/hearings`)
-- `POST /` - Schedule hearing
-- `GET /` - List hearings (filterable)
-- `GET /calendar` - Calendar view
-- `GET /{id}` - Get hearing details
-- `PATCH /{id}` - Update hearing
-- `PATCH /{id}/status` - Update status
-- `DELETE /{id}` - Soft delete hearing
-
-### Chat (`/api/chat`)
-- `POST /{caseId}` - Send message
-- `GET /{caseId}` - Get messages
-
-### Billing (`/api/billing`)
-- `POST /subscribe` - Create subscription
-- `POST /webhook` - Razorpay webhook
-- `GET /subscription` - Get current subscription
-- `POST /invoices` - Create invoice
-- `GET /invoices` - List invoices
-- `GET /invoices/{id}` - Get invoice details
-- `PATCH /invoices/{id}/send` - Send invoice to client
-- `GET /invoices/{id}/pdf` - Download invoice PDF
-
-### Notifications (`/api/notifications`)
-- `GET /` - Get user notifications
-- `PATCH /{id}/read` - Mark as read
-- `PATCH /read-all` - Mark all as read
-
-### Analytics (`/api/analytics`) - FirmAdmin only
-- `GET /overview` - Dashboard overview
-- `GET /cases` - Cases breakdown
-- `GET /revenue` - Revenue analytics
-- `GET /lawyers` - Lawyer performance
-- `GET /hearings` - Hearing statistics
-
-### Audit (`/api/audit`) - FirmAdmin only
-- `GET /` - List audit logs
-
-## Architecture
-
-```
-LexCore/
-├── src/
-│   ├── LexCore.API/           # Controllers, Middleware, Program.cs
-│   ├── LexCore.Application/   # Services, DTOs, Interfaces, Validators
-│   ├── LexCore.Domain/        # Entities, Enums
-│   └── LexCore.Infrastructure/ # DbContext, Repositories, Services, Jobs
-├── docker-compose.yml
-├── Dockerfile
-├── .env.example
-└── README.md
-```
-
-## Multi-Tenancy
-
-LexCore uses a shared database with row-level tenant isolation:
-- Every table has a `FirmId` column
-- Every query filters by `FirmId`
-- Tenant context extracted from JWT claims via `TenantMiddleware`
-
-## Security
-
-- JWT access tokens expire in 15 minutes
-- Refresh tokens expire in 7 days and rotate on each use
-- Passwords hashed with BCrypt (work factor 12)
-- Rate limiting on auth endpoints
-- Role-based authorization on all endpoints
-- Soft deletes for data retention
-
-## License
-
-Proprietary - All rights reserved
+Proprietary Indian Legal LLM — being built in parallel, trained on data no one else has
+Network effects — lawyers invite clients, clients invite their lawyers
+Data flywheel — every case note, every diary entry makes our AI smarter
+WhatsApp-first — built for how Indian lawyers actually communicate, not how Silicon Valley thinks they do
