@@ -2,7 +2,6 @@ using LexCore.Application.DTOs;
 using LexCore.Application.DTOs.Documents;
 using LexCore.Application.Interfaces;
 using LexCore.Domain.Entities;
-using LexCore.Domain.Enums;
 using LexCore.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -57,27 +56,21 @@ public class DocumentsController : ControllerBase
                 "INVALID_FILE_TYPE", 400));
         }
 
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
         var caseExists = await _context.Cases.AnyAsync(c =>
             c.Id == request.CaseId &&
-            (firmId.HasValue
-                ? c.FirmId == firmId.Value
-                : c.FirmId == null &&
-                  c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)));
+            c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
         if (!caseExists)
         {
             return BadRequest(ApiResponse<DocumentDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 400));
         }
 
         using var stream = file.OpenReadStream();
-        var folderOwner = firmId.HasValue ? firmId.Value.ToString() : userId.ToString();
-        var fileUrl = await _storageService.UploadFileAsync(stream, file.FileName, file.ContentType, $"documents/{folderOwner}/{request.CaseId}");
+        var fileUrl = await _storageService.UploadFileAsync(stream, file.FileName, file.ContentType, $"documents/{userId}/{request.CaseId}");
 
         var document = new Document
         {
-            FirmId = firmId,
             CaseId = request.CaseId,
             UploadedBy = userId,
             FileName = file.FileName,
@@ -139,38 +132,20 @@ public class DocumentsController : ControllerBase
         // Cap page size — never return more than 100 at once
         if (pageSize > 100) pageSize = 100;
         if (page < 1) page = 1;
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
-        var role = _tenantService.GetCurrentUserRole();
 
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers)
-            .Include(c => c.CaseClients)
-            .FirstOrDefaultAsync(c => c.Id == caseId && (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
+            .FirstOrDefaultAsync(c =>
+                c.Id == caseId &&
+                c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (caseEntity == null)
-        {
             return NotFound(ApiResponse<List<DocumentDto>>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
-        }
-
-        if (role == UserRole.Lawyer.ToString() && !caseEntity.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null))
-        {
-            return Forbid();
-        }
-
-        if (role == UserRole.Client.ToString() && !caseEntity.CaseClients.Any(cc => cc.ClientId == userId && cc.DeletedAt == null))
-        {
-            return Forbid();
-        }
 
         var query = _context.Documents
             .Include(d => d.Uploader)
-            .Where(d => d.CaseId == caseId && (firmId.HasValue ? d.FirmId == firmId.Value : d.FirmId == null));
-
-        if (role == UserRole.Client.ToString())
-        {
-            query = query.Where(d => d.IsClientVisible);
-        }
+            .Where(d => d.CaseId == caseId);
 
         if (!string.IsNullOrEmpty(category))
         {
@@ -220,36 +195,17 @@ public class DocumentsController : ControllerBase
     [HttpGet("{id:guid}/download")]
     public async Task<IActionResult> DownloadDocument(Guid id)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
-        var role = _tenantService.GetCurrentUserRole();
 
         var document = await _context.Documents
             .Include(d => d.Case)
                 .ThenInclude(c => c!.CaseLawyers)
-            .Include(d => d.Case)
-                .ThenInclude(c => c!.CaseClients)
-            .FirstOrDefaultAsync(d => d.Id == id && (firmId.HasValue ? d.FirmId == firmId.Value : d.FirmId == null));
+            .FirstOrDefaultAsync(d =>
+                d.Id == id &&
+                d.Case!.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (document == null)
-        {
             return NotFound(new { success = false, message = "Document not found", code = "NOT_FOUND" });
-        }
-
-        if (role == UserRole.Client.ToString())
-        {
-            if (!document.IsClientVisible || !document.Case!.CaseClients.Any(cc => cc.ClientId == userId && cc.DeletedAt == null))
-            {
-                return Forbid();
-            }
-        }
-        else if (role == UserRole.Lawyer.ToString())
-        {
-            if (!document.Case!.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null))
-            {
-                return Forbid();
-            }
-        }
 
         // For S3 — redirect to signed URL (no data proxied through API)
         if (document.FileUrl.StartsWith("s3://"))
@@ -272,22 +228,15 @@ public class DocumentsController : ControllerBase
     [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<DocumentDto>>> UpdateDocument(Guid id, [FromBody] UpdateDocumentRequest request)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
-        // Security: solo lawyers can only update documents from their own cases
         var document = await _context.Documents
             .Include(d => d.Uploader)
             .Include(d => d.Case)
                 .ThenInclude(c => c!.CaseLawyers)
             .FirstOrDefaultAsync(d =>
                 d.Id == id &&
-                (firmId.HasValue
-                    ? d.FirmId == firmId.Value
-                    : d.FirmId == null &&
-                      d.Case!.CaseLawyers.Any(cl =>
-                          cl.LawyerId == userId &&
-                          cl.DeletedAt == null)));
+                d.Case!.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (document == null)
         {
@@ -326,21 +275,14 @@ public class DocumentsController : ControllerBase
     [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteDocument(Guid id)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
-        // Security: solo lawyers can only delete documents from their own cases
         var document = await _context.Documents
             .Include(d => d.Case)
                 .ThenInclude(c => c!.CaseLawyers)
             .FirstOrDefaultAsync(d =>
                 d.Id == id &&
-                (firmId.HasValue
-                    ? d.FirmId == firmId.Value
-                    : d.FirmId == null &&
-                      d.Case!.CaseLawyers.Any(cl =>
-                          cl.LawyerId == userId &&
-                          cl.DeletedAt == null)));
+                d.Case!.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (document == null)
         {
@@ -379,22 +321,15 @@ public class DocumentsController : ControllerBase
                 "INVALID_FILE_TYPE", 400));
         }
 
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
-        // Security: solo lawyers can only version their own case documents
         var document = await _context.Documents
             .Include(d => d.Uploader)
             .Include(d => d.Case)
                 .ThenInclude(c => c!.CaseLawyers)
             .FirstOrDefaultAsync(d =>
                 d.Id == id &&
-                (firmId.HasValue
-                    ? d.FirmId == firmId.Value
-                    : d.FirmId == null &&
-                      d.Case!.CaseLawyers.Any(cl =>
-                          cl.LawyerId == userId &&
-                          cl.DeletedAt == null)));
+                d.Case!.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (document == null)
         {
@@ -402,15 +337,10 @@ public class DocumentsController : ControllerBase
                 "Document not found", "NOT_FOUND", 404));
         }
 
-        // Use userId as folder owner for solo lawyers (firmId is null)
-        var folderOwner = firmId.HasValue
-            ? firmId.Value.ToString()
-            : userId.ToString();
-
         using var stream = file.OpenReadStream();
         var fileUrl = await _storageService.UploadFileAsync(
             stream, file.FileName, file.ContentType,
-            $"documents/{folderOwner}/{document.CaseId}");
+            $"documents/{userId}/{document.CaseId}");
 
         document.Version++;
         document.FileUrl = fileUrl;
@@ -536,21 +466,14 @@ public class DocumentsController : ControllerBase
     [HttpGet("{id:guid}/versions")]
     public async Task<ActionResult<ApiResponse<List<DocumentVersionDto>>>> GetVersionHistory(Guid id)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
-        // Security: solo lawyers can only view version history of their own documents
         var document = await _context.Documents
             .Include(d => d.Case)
                 .ThenInclude(c => c!.CaseLawyers)
             .FirstOrDefaultAsync(d =>
                 d.Id == id &&
-                (firmId.HasValue
-                    ? d.FirmId == firmId.Value
-                    : d.FirmId == null &&
-                      d.Case!.CaseLawyers.Any(cl =>
-                          cl.LawyerId == userId &&
-                          cl.DeletedAt == null)));
+                d.Case!.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
         if (document == null)
         {
             return NotFound(ApiResponse<List<DocumentVersionDto>>.ErrorResponse("Document not found", "NOT_FOUND", 404));

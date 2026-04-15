@@ -31,17 +31,14 @@ public class CasesController : ControllerBase
     [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<CaseDto>>> CreateCase([FromBody] CreateCaseRequest request)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
-
-        var caseNumber = await GenerateCaseNumber(firmId, userId);
+        var caseNumber = await GenerateCaseNumber(userId);
 
         using var transaction = await _context.Database.BeginTransactionAsync();
         try
         {
             var newCase = new Case
             {
-                FirmId = firmId,
                 CaseNumber = caseNumber,
                 Title = request.Title,
                 CaseBackground = request.CaseBackground,
@@ -128,19 +125,15 @@ public class CasesController : ControllerBase
             await _context.SaveChangesAsync();
 
             // Solo lawyer auto-assignment
-            if (!firmId.HasValue)
-            {
-                await _context.CaseLawyers.AddAsync(
-                    new CaseLawyer { CaseId = newCase.Id, LawyerId = userId });
-                await _context.SaveChangesAsync();
-            }
+            await _context.CaseLawyers.AddAsync(
+                new CaseLawyer { CaseId = newCase.Id, LawyerId = userId });
+            await _context.SaveChangesAsync();
 
             // Auto-create advance Payment record if advance was paid
             if (request.AdvancePaid.HasValue && request.AdvancePaid.Value > 0)
             {
                 var advancePayment = new Payment
                 {
-                    FirmId = firmId,
                     CaseId = newCase.Id,
                     InvoiceId = null,
                     Amount = request.AdvancePaid.Value,
@@ -163,8 +156,7 @@ public class CasesController : ControllerBase
                 ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
 
             return CreatedAtAction(nameof(GetCase), new { id = newCase.Id },
-                ApiResponse<CaseDto>.SuccessResponse(MapToCaseDto(newCase),
-                    "Case created successfully"));
+                ApiResponse<CaseDto>.SuccessResponse(MapToCaseDto(newCase), "Case created successfully"));
         }
         catch
         {
@@ -174,34 +166,20 @@ public class CasesController : ControllerBase
     }
 
     [HttpGet]
+    [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<PagedResponse<CaseListDto>>> GetCases([FromQuery] CaseFilterRequest filter)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
-        var role = _tenantService.GetCurrentUserRole();
 
-        var query = firmId.HasValue
-            ? _context.Cases.Where(c => c.FirmId == firmId.Value).AsQueryable()
-            : _context.Cases.Where(c => c.FirmId == null &&
-                                        c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)).AsQueryable();
-
-        if (firmId.HasValue && role == UserRole.Lawyer.ToString())
-        {
-            query = query.Where(c => c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
-        }
-        else if (role == UserRole.Client.ToString())
-        {
-            query = query.Where(c => c.CaseClients.Any(cc => cc.ClientId == userId && cc.DeletedAt == null));
-        }
+        var query = _context.Cases
+            .Where(c => c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null))
+            .AsQueryable();
 
         if (filter.Status.HasValue)
             query = query.Where(c => c.Status == filter.Status.Value);
 
         if (!string.IsNullOrEmpty(filter.CaseType))
             query = query.Where(c => c.CaseType == filter.CaseType);
-
-        if (filter.LawyerId.HasValue)
-            query = query.Where(c => c.CaseLawyers.Any(cl => cl.LawyerId == filter.LawyerId.Value && cl.DeletedAt == null));
 
         if (!string.IsNullOrEmpty(filter.Search))
             query = query.Where(c => c.Title.Contains(filter.Search) || c.CaseNumber.Contains(filter.Search));
@@ -245,37 +223,22 @@ public class CasesController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<CaseDto>>> GetCase(Guid id)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
-        var role = _tenantService.GetCurrentUserRole();
 
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers.Where(cl => cl.DeletedAt == null))
                 .ThenInclude(cl => cl.Lawyer)
             .Include(c => c.CaseClients.Where(cc => cc.DeletedAt == null))
                 .ThenInclude(cc => cc.Client)
-            .FirstOrDefaultAsync(c => c.Id == id &&
-                (firmId.HasValue
-                    ? c.FirmId == firmId.Value
-                    : c.FirmId == null &&
-                      c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)));
+            .FirstOrDefaultAsync(c =>
+                c.Id == id &&
+                c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (caseEntity == null)
-        {
             return NotFound(ApiResponse<CaseDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
-        }
-
-        if (role == UserRole.Lawyer.ToString() && !caseEntity.CaseLawyers.Any(cl => cl.LawyerId == userId))
-        {
-            return Forbid();
-        }
-
-        if (role == UserRole.Client.ToString() && !caseEntity.CaseClients.Any(cc => cc.ClientId == userId))
-        {
-            return Forbid();
-        }
 
         var dto = MapToCaseDto(caseEntity);
         dto.AssignedLawyers = caseEntity.CaseLawyers.Select(cl => new AssignedUserDto
@@ -285,21 +248,9 @@ public class CasesController : ControllerBase
             Email = cl.Lawyer.Email,
             AssignedAt = cl.AssignedAt
         }).ToList();
-        dto.AssignedClients = caseEntity.CaseClients.Select(cc => new AssignedUserDto
-        {
-            Id = cc.Client!.Id,
-            Name = cc.Client.Name,
-            Email = cc.Client.Email,
-            AssignedAt = cc.AssignedAt
-        }).ToList();
 
         dto.DocumentsCount = await _context.Documents.CountAsync(d => d.CaseId == id && d.DeletedAt == null);
         dto.HearingsCount = await _context.Hearings.CountAsync(h => h.CaseId == id && h.DeletedAt == null);
-
-        if (role == UserRole.Client.ToString())
-        {
-            dto.PrivateNotes = null;
-        }
 
         return Ok(ApiResponse<CaseDto>.SuccessResponse(dto));
     }
@@ -308,25 +259,16 @@ public class CasesController : ControllerBase
     [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<CaseDto>>> UpdateCase(Guid id, [FromBody] UpdateCaseRequest request)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
-        // Security: solo lawyers can only update their own cases
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers)
             .FirstOrDefaultAsync(c =>
                 c.Id == id &&
-                (firmId.HasValue
-                    ? c.FirmId == firmId.Value
-                    : c.FirmId == null &&
-                      c.CaseLawyers.Any(cl =>
-                          cl.LawyerId == userId &&
-                          cl.DeletedAt == null)));
+                c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (caseEntity == null)
-        {
             return NotFound(ApiResponse<CaseDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
-        }
 
         // SECURITY GUARD: AgreedFees immutability contract.
         // AgreedFees is set once at case creation (TotalFeeLockedAt
@@ -356,55 +298,32 @@ public class CasesController : ControllerBase
             AgreedFeesImmutable = caseEntity.AgreedFees
         });
 
-        if (!string.IsNullOrEmpty(request.Title))
-            caseEntity.Title = request.Title;
-        if (request.CaseBackground != null)
-            caseEntity.CaseBackground = request.CaseBackground;
-        if (request.CaseType != null)
-            caseEntity.CaseType = request.CaseType;
-        if (request.CourtName != null)
-            caseEntity.CourtName = request.CourtName;
+        if (!string.IsNullOrEmpty(request.Title)) caseEntity.Title = request.Title;
+        if (request.CaseBackground != null) caseEntity.CaseBackground = request.CaseBackground;
+        if (request.CaseType != null) caseEntity.CaseType = request.CaseType;
+        if (request.CourtName != null) caseEntity.CourtName = request.CourtName;
         if (request.FiledDate.HasValue)
             caseEntity.FiledDate = DateTime.SpecifyKind(request.FiledDate.Value, DateTimeKind.Utc);
-        if (request.PrivateNotes != null)
-            caseEntity.PrivateNotes = request.PrivateNotes;
-        if (request.ClientInstructions != null)
-            caseEntity.ClientInstructions = request.ClientInstructions;
-        if (request.Status.HasValue)
-            caseEntity.Status = request.Status.Value;
-        if (request.ClientName != null)
-            caseEntity.ClientName = request.ClientName;
-        if (request.ClientPhone != null)
-            caseEntity.ClientPhone = request.ClientPhone;
-        if (request.ClientWhatsApp != null)
-            caseEntity.ClientWhatsApp = request.ClientWhatsApp;
-        if (request.ClientPosition != null)
-            caseEntity.ClientPosition = request.ClientPosition;
-        if (request.OppositeParty != null)
-            caseEntity.OppositeParty = request.OppositeParty;
-        if (request.OppositePartyLawyer != null)
-            caseEntity.OppositePartyLawyer = request.OppositePartyLawyer;
-        if (request.SectionAct != null)
-            caseEntity.SectionAct = request.SectionAct;
-        if (request.FIRNumber != null)
-            caseEntity.FIRNumber = request.FIRNumber;
-        if (request.CaseStage != null)
-            caseEntity.CaseStage = request.CaseStage;
-        if (request.ReliefSought != null)
-            caseEntity.ReliefSought = request.ReliefSought;
-        if (request.FeeType != null)
-            caseEntity.FeeType = request.FeeType;
-        if (request.PerHearingFee.HasValue)
-            caseEntity.PerHearingFee = request.PerHearingFee;
-        if (request.VakalatnamaSigned.HasValue)
-            caseEntity.VakalatnamaSigned = request.VakalatnamaSigned.Value;
+        if (request.PrivateNotes != null) caseEntity.PrivateNotes = request.PrivateNotes;
+        if (request.ClientInstructions != null) caseEntity.ClientInstructions = request.ClientInstructions;
+        if (request.Status.HasValue) caseEntity.Status = request.Status.Value;
+        if (request.ClientName != null) caseEntity.ClientName = request.ClientName;
+        if (request.ClientPhone != null) caseEntity.ClientPhone = request.ClientPhone;
+        if (request.ClientWhatsApp != null) caseEntity.ClientWhatsApp = request.ClientWhatsApp;
+        if (request.ClientPosition != null) caseEntity.ClientPosition = request.ClientPosition;
+        if (request.OppositeParty != null) caseEntity.OppositeParty = request.OppositeParty;
+        if (request.OppositePartyLawyer != null) caseEntity.OppositePartyLawyer = request.OppositePartyLawyer;
+        if (request.SectionAct != null) caseEntity.SectionAct = request.SectionAct;
+        if (request.FIRNumber != null) caseEntity.FIRNumber = request.FIRNumber;
+        if (request.CaseStage != null) caseEntity.CaseStage = request.CaseStage;
+        if (request.ReliefSought != null) caseEntity.ReliefSought = request.ReliefSought;
+        if (request.FeeType != null) caseEntity.FeeType = request.FeeType;
+        if (request.PerHearingFee.HasValue) caseEntity.PerHearingFee = request.PerHearingFee;
+        if (request.VakalatnamaSigned.HasValue) caseEntity.VakalatnamaSigned = request.VakalatnamaSigned.Value;
         if (request.LimitationDate.HasValue)
             caseEntity.LimitationDate = DateTime.SpecifyKind(request.LimitationDate.Value, DateTimeKind.Utc);
-        if (request.NotifyClientOnHearing.HasValue)
-            caseEntity.NotifyClientOnHearing = request.NotifyClientOnHearing.Value;
-        if (request.NotifyClientOnStatus.HasValue)
-            caseEntity.NotifyClientOnStatus = request.NotifyClientOnStatus.Value;
-
+        if (request.NotifyClientOnHearing.HasValue) caseEntity.NotifyClientOnHearing = request.NotifyClientOnHearing.Value;
+        if (request.NotifyClientOnStatus.HasValue) caseEntity.NotifyClientOnStatus = request.NotifyClientOnStatus.Value;
         if (request.CourtType != null) caseEntity.CourtType = request.CourtType;
         if (request.StateUT != null) caseEntity.StateUT = request.StateUT;
         if (request.District != null) caseEntity.District = request.District;
@@ -442,7 +361,8 @@ public class CasesController : ControllerBase
         if (request.ClientInstructionsHtml != null) caseEntity.ClientInstructionsHtml = request.ClientInstructionsHtml;
 
         await _context.SaveChangesAsync();
-        await _auditService.LogAsync("CASE_UPDATED", "Case", id, oldValues, ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
+        await _auditService.LogAsync("CASE_UPDATED", "Case", id, oldValues,
+            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(ApiResponse<CaseDto>.SuccessResponse(MapToCaseDto(caseEntity)));
     }
@@ -451,31 +371,23 @@ public class CasesController : ControllerBase
     [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<CaseDto>>> UpdateCaseStatus(Guid id, [FromBody] UpdateCaseStatusRequest request)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
-        // Security: solo lawyers can only update status of their own cases
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers)
             .FirstOrDefaultAsync(c =>
                 c.Id == id &&
-                (firmId.HasValue
-                    ? c.FirmId == firmId.Value
-                    : c.FirmId == null &&
-                      c.CaseLawyers.Any(cl =>
-                          cl.LawyerId == userId &&
-                          cl.DeletedAt == null)));
+                c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (caseEntity == null)
-        {
             return NotFound(ApiResponse<CaseDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
-        }
 
         var oldStatus = caseEntity.Status.ToString();
         caseEntity.Status = request.Status;
 
         await _context.SaveChangesAsync();
-        await _auditService.LogAsync("CASE_STATUS_CHANGED", "Case", id, oldStatus, request.Status.ToString(), HttpContext.Connection.RemoteIpAddress?.ToString());
+        await _auditService.LogAsync("CASE_STATUS_CHANGED", "Case", id, oldStatus, request.Status.ToString(),
+            HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(ApiResponse<CaseDto>.SuccessResponse(MapToCaseDto(caseEntity)));
     }
@@ -484,33 +396,16 @@ public class CasesController : ControllerBase
     [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteCase(Guid id)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
-        var role = _tenantService.GetCurrentUserRole();
 
-        // Security: solo lawyers can only delete their own cases
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers)
             .FirstOrDefaultAsync(c =>
                 c.Id == id &&
-                (firmId.HasValue
-                    ? c.FirmId == firmId.Value
-                    : c.FirmId == null &&
-                      c.CaseLawyers.Any(cl =>
-                          cl.LawyerId == userId &&
-                          cl.DeletedAt == null)));
+                c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (caseEntity == null)
-        {
-            return NotFound(ApiResponse<object>.ErrorResponse(
-                "Case not found", "CASE_NOT_FOUND", 404));
-        }
-
-        // Firm lawyers: only FirmAdmin can delete cases
-        if (firmId.HasValue && role != UserRole.FirmAdmin.ToString() && role != UserRole.SuperAdmin.ToString())
-        {
-            return Forbid();
-        }
+            return NotFound(ApiResponse<object>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
 
         caseEntity.DeletedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
@@ -520,138 +415,21 @@ public class CasesController : ControllerBase
         return Ok(ApiResponse<object>.SuccessResponse(null!, "Case deleted successfully"));
     }
 
-    [HttpPost("{id:guid}/lawyers")]
-    [Authorize(Policy = "FirmAdmin")]
-    public async Task<ActionResult<ApiResponse<object>>> AssignLawyer(Guid id, [FromBody] AssignUserRequest request)
-    {
-        var firmId = _tenantService.GetCurrentFirmId();
-
-        var caseEntity = await _context.Cases.FirstOrDefaultAsync(c => c.Id == id && c.FirmId == firmId);
-        if (caseEntity == null)
-        {
-            return NotFound(ApiResponse<object>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
-        }
-
-        var lawyer = await _context.Users.FirstOrDefaultAsync(u => u.Id == request.UserId && u.FirmId == firmId && u.Role == UserRole.Lawyer);
-        if (lawyer == null)
-        {
-            return BadRequest(ApiResponse<object>.ErrorResponse("Lawyer not found", "LAWYER_NOT_FOUND", 400));
-        }
-
-        var exists = await _context.CaseLawyers.AnyAsync(cl => cl.CaseId == id && cl.LawyerId == request.UserId && cl.DeletedAt == null);
-        if (exists)
-        {
-            return BadRequest(ApiResponse<object>.ErrorResponse("Lawyer already assigned", "ALREADY_ASSIGNED", 400));
-        }
-
-        await _context.CaseLawyers.AddAsync(new CaseLawyer { CaseId = id, LawyerId = request.UserId });
-        await _context.SaveChangesAsync();
-        await _auditService.LogAsync("LAWYER_ASSIGNED", "Case", id, newValues: request.UserId.ToString(), ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
-
-        return Ok(ApiResponse<object>.SuccessResponse(null!, "Lawyer assigned successfully"));
-    }
-
-    [HttpDelete("{id:guid}/lawyers/{lawyerId:guid}")]
-    [Authorize(Policy = "FirmAdmin")]
-    public async Task<ActionResult<ApiResponse<object>>> RemoveLawyer(Guid id, Guid lawyerId)
-    {
-        var firmId = _tenantService.GetCurrentFirmId();
-
-        var assignment = await _context.CaseLawyers.FirstOrDefaultAsync(cl => 
-            cl.CaseId == id && 
-            cl.LawyerId == lawyerId && 
-            cl.DeletedAt == null &&
-            cl.Case!.FirmId == firmId);
-
-        if (assignment == null)
-        {
-            return NotFound(ApiResponse<object>.ErrorResponse("Assignment not found", "NOT_FOUND", 404));
-        }
-
-        assignment.DeletedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
-        await _auditService.LogAsync("LAWYER_REMOVED", "Case", id, oldValues: lawyerId.ToString(), ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
-
-        return Ok(ApiResponse<object>.SuccessResponse(null!, "Lawyer removed successfully"));
-    }
-
-    [HttpPost("{id:guid}/clients")]
-    [Authorize(Policy = "FirmAdmin")]
-    public async Task<ActionResult<ApiResponse<object>>> AssignClient(Guid id, [FromBody] AssignUserRequest request)
-    {
-        var firmId = _tenantService.GetCurrentFirmId();
-
-        var caseEntity = await _context.Cases.FirstOrDefaultAsync(c => c.Id == id && c.FirmId == firmId);
-        if (caseEntity == null)
-        {
-            return NotFound(ApiResponse<object>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
-        }
-
-        var client = await _context.Users.FirstOrDefaultAsync(u => u.Id == request.UserId && u.FirmId == firmId && u.Role == UserRole.Client);
-        if (client == null)
-        {
-            return BadRequest(ApiResponse<object>.ErrorResponse("Client not found", "CLIENT_NOT_FOUND", 400));
-        }
-
-        var exists = await _context.CaseClients.AnyAsync(cc => cc.CaseId == id && cc.ClientId == request.UserId && cc.DeletedAt == null);
-        if (exists)
-        {
-            return BadRequest(ApiResponse<object>.ErrorResponse("Client already assigned", "ALREADY_ASSIGNED", 400));
-        }
-
-        await _context.CaseClients.AddAsync(new CaseClient { CaseId = id, ClientId = request.UserId });
-        await _context.SaveChangesAsync();
-        await _auditService.LogAsync("CLIENT_ASSIGNED", "Case", id, newValues: request.UserId.ToString(), ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
-
-        return Ok(ApiResponse<object>.SuccessResponse(null!, "Client assigned successfully"));
-    }
-
-    [HttpDelete("{id:guid}/clients/{clientId:guid}")]
-    [Authorize(Policy = "FirmAdmin")]
-    public async Task<ActionResult<ApiResponse<object>>> RemoveClient(Guid id, Guid clientId)
-    {
-        var firmId = _tenantService.GetCurrentFirmId();
-
-        var assignment = await _context.CaseClients.FirstOrDefaultAsync(cc => 
-            cc.CaseId == id && 
-            cc.ClientId == clientId && 
-            cc.DeletedAt == null &&
-            cc.Case!.FirmId == firmId);
-
-        if (assignment == null)
-        {
-            return NotFound(ApiResponse<object>.ErrorResponse("Assignment not found", "NOT_FOUND", 404));
-        }
-
-        assignment.DeletedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
-        await _auditService.LogAsync("CLIENT_REMOVED", "Case", id, oldValues: clientId.ToString(), ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
-
-        return Ok(ApiResponse<object>.SuccessResponse(null!, "Client removed successfully"));
-    }
-
     [HttpGet("{id:guid}/timeline")]
+    [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<List<CaseTimelineDto>>>> GetCaseTimeline(Guid id)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
-        // Security: solo lawyers can only view timeline of their own cases
         var caseExists = await _context.Cases.AnyAsync(c =>
             c.Id == id &&
-            (firmId.HasValue
-                ? c.FirmId == firmId.Value
-                : c.FirmId == null &&
-                  c.CaseLawyers.Any(cl =>
-                      cl.LawyerId == userId &&
-                      cl.DeletedAt == null)));
+            c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
+
         if (!caseExists)
-        {
             return NotFound(ApiResponse<List<CaseTimelineDto>>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
-        }
 
         var timeline = await _context.AuditLogs
-            .Where(a => (firmId.HasValue ? a.FirmId == firmId.Value : a.FirmId == null) && a.EntityType == "Case" && a.EntityId == id)
+            .Where(a => a.EntityType == "Case" && a.EntityId == id)
             .OrderByDescending(a => a.Timestamp)
             .Take(50)
             .Select(a => new CaseTimelineDto
@@ -667,28 +445,24 @@ public class CasesController : ControllerBase
         return Ok(ApiResponse<List<CaseTimelineDto>>.SuccessResponse(timeline));
     }
 
-    // GET /api/cases/{id}/notes
     [HttpGet("{id:guid}/notes")]
     [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<List<CaseNoteDto>>>> GetCaseNotes(Guid id)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
         var caseExists = await _context.Cases.AnyAsync(c =>
             c.Id == id &&
-            (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null) &&
             c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (!caseExists)
-            return NotFound(ApiResponse<List<CaseNoteDto>>.ErrorResponse(
-                "Case not found", "CASE_NOT_FOUND", 404));
+            return NotFound(ApiResponse<List<CaseNoteDto>>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
 
         var notes = await _context.CaseNotes
             .Include(n => n.Lawyer)
             .Where(n => n.CaseId == id)
             .OrderByDescending(n => n.CreatedAt)
-            .Take(200)   // cap — a case with 200+ notes is unusual
+            .Take(200)
             .Select(n => new CaseNoteDto
             {
                 Id = n.Id,
@@ -702,23 +476,19 @@ public class CasesController : ControllerBase
         return Ok(ApiResponse<List<CaseNoteDto>>.SuccessResponse(notes));
     }
 
-    // POST /api/cases/{id}/notes
     [HttpPost("{id:guid}/notes")]
     [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<CaseNoteDto>>> AddCaseNote(
         Guid id, [FromBody] AddCaseNoteRequest request)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
         var caseExists = await _context.Cases.AnyAsync(c =>
             c.Id == id &&
-            (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null) &&
             c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (!caseExists)
-            return NotFound(ApiResponse<CaseNoteDto>.ErrorResponse(
-                "Case not found", "CASE_NOT_FOUND", 404));
+            return NotFound(ApiResponse<CaseNoteDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
 
         var note = new CaseNote
         {
@@ -745,125 +515,108 @@ public class CasesController : ControllerBase
         }));
     }
 
-    private async Task<string> GenerateCaseNumber(Guid? firmId, Guid userId)
+    // ── HELPERS ──────────────────────────────────────────────────────────────
+
+    private async Task<string> GenerateCaseNumber(Guid userId)
     {
         var year = DateTime.UtcNow.Year;
-        int retries = 0;
         const int maxRetries = 5;
 
-        while (retries < maxRetries)
+        for (var retry = 0; retry < maxRetries; retry++)
         {
-            int count;
-            if (firmId.HasValue)
-            {
-                count = await _context.Cases
-                    .IgnoreQueryFilters()
-                    .CountAsync(c => c.FirmId == firmId.Value && c.CreatedAt.Year == year);
-            }
-            else
-            {
-                count = await _context.Cases
-                    .IgnoreQueryFilters()
-                    .CountAsync(c => c.FirmId == null &&
-                                     c.CaseLawyers.Any(cl => cl.LawyerId == userId) &&
-                                     c.CreatedAt.Year == year);
-            }
+            var count = await _context.Cases
+                .IgnoreQueryFilters()
+                .CountAsync(c =>
+                    c.CaseLawyers.Any(cl => cl.LawyerId == userId) &&
+                    c.CreatedAt.Year == year);
 
             var candidate = $"LEX-{year}-{(count + 1):D5}";
 
-            // Check if this number already exists (handles race condition)
             var exists = await _context.Cases
                 .IgnoreQueryFilters()
                 .AnyAsync(c => c.CaseNumber == candidate);
 
-            if (!exists)
-                return candidate;
+            if (!exists) return candidate;
 
-            // Collision: add timestamp suffix to ensure uniqueness
-            retries++;
-            await Task.Delay(10); // brief wait before retry
+            await Task.Delay(10);
         }
 
-        // Fallback: use timestamp-based number (guaranteed unique)
         var ticks = DateTime.UtcNow.Ticks % 100000;
         return $"LEX-{year}-T{ticks:D5}";
     }
 
-    private static CaseDto MapToCaseDto(Case c)
+    private static CaseDto MapToCaseDto(Case c) => new CaseDto
     {
-        return new CaseDto
-        {
-            Id = c.Id,
-            CaseNumber = c.CaseNumber,
-            Title = c.Title,
-            CaseBackground = c.CaseBackground,
-            CaseType = c.CaseType,
-            CourtName = c.CourtName,
-            Status = c.Status.ToString(),
-            FiledDate = c.FiledDate,
-            PrivateNotes = c.PrivateNotes,
-            ClientInstructions = c.ClientInstructions,
-            CreatedAt = c.CreatedAt,
-            UpdatedAt = c.UpdatedAt,
-            ClientName = c.ClientName,
-            ClientPhone = c.ClientPhone,
-            ClientWhatsApp = c.ClientWhatsApp,
-            ClientPosition = c.ClientPosition,
-            OppositeParty = c.OppositeParty,
-            OppositePartyLawyer = c.OppositePartyLawyer,
-            SectionAct = c.SectionAct,
-            FIRNumber = c.FIRNumber,
-            CaseStage = c.CaseStage,
-            ReliefSought = c.ReliefSought,
-            FeeType = c.FeeType,
-            AgreedFees = c.AgreedFees,
-            AdvancePaid = c.AdvancePaid,
-            PerHearingFee = c.PerHearingFee,
-            VakalatnamaSigned = c.VakalatnamaSigned,
-            LimitationDate = c.LimitationDate,
-            NotifyClientOnHearing = c.NotifyClientOnHearing,
-            NotifyClientOnStatus = c.NotifyClientOnStatus,
-            LimitationAlertSent30 = c.LimitationAlertSent30,
-            LimitationAlertSent7 = c.LimitationAlertSent7,
-            LimitationAlertSent1 = c.LimitationAlertSent1,
-            CourtType = c.CourtType,
-            StateUT = c.StateUT,
-            District = c.District,
-            CourtHierarchyName = c.CourtHierarchyName,
-            CaseTypeCode = c.CaseTypeCode,
-            CaseNature = c.CaseNature,
-            TotalFeeLockedAt = c.TotalFeeLockedAt,
-            ClientType = c.ClientType,
-            ClientFatherName = c.ClientFatherName,
-            ClientAge = c.ClientAge,
-            ClientAddress = c.ClientAddress,
-            ClientIDDocumentType = c.ClientIDDocumentType,
-            CompanyName = c.CompanyName,
-            CompanyCIN = c.CompanyCIN,
-            CompanyGST = c.CompanyGST,
-            AuthorisedRepresentative = c.AuthorisedRepresentative,
-            AuthorisedRepresentativeDesignation = c.AuthorisedRepresentativeDesignation,
-            OppositePartiesJson = c.OppositePartiesJson,
-            OppositeCounselName = c.OppositeCounselName,
-            OppositeCounselPhone = c.OppositeCounselPhone,
-            OppositeCounselEnrollment = c.OppositeCounselEnrollment,
-            OppositeCounselCity = c.OppositeCounselCity,
-            ActsAndSectionsJson = c.ActsAndSectionsJson,
-            FIRDate = c.FIRDate,
-            PSDistrict = c.PSDistrict,
-            PSState = c.PSState,
-            NatureOfOffence = c.NatureOfOffence,
-            CaseNotesHtml = c.CaseNotesHtml,
-            PaymentMode = c.PaymentMode,
-            PaymentReference = c.PaymentReference,
-            HearingReminderEvening = c.HearingReminderEvening,
-            HearingReminderMorning = c.HearingReminderMorning,
-            LimitationAlertEnabled = c.LimitationAlertEnabled,
-            InvoiceOverdueAlert = c.InvoiceOverdueAlert,
-            CaseStageChangeAlert = c.CaseStageChangeAlert,
-            ClientWhatsAppEnabled = c.ClientWhatsAppEnabled,
-            PrivateNotesHtml = c.PrivateNotesHtml,
-            ClientInstructionsHtml = c.ClientInstructionsHtml,
-        };
-    }
+        Id = c.Id,
+        CaseNumber = c.CaseNumber,
+        Title = c.Title,
+        CaseBackground = c.CaseBackground,
+        CaseType = c.CaseType,
+        CourtName = c.CourtName,
+        Status = c.Status.ToString(),
+        FiledDate = c.FiledDate,
+        PrivateNotes = c.PrivateNotes,
+        ClientInstructions = c.ClientInstructions,
+        CreatedAt = c.CreatedAt,
+        UpdatedAt = c.UpdatedAt,
+        ClientName = c.ClientName,
+        ClientPhone = c.ClientPhone,
+        ClientWhatsApp = c.ClientWhatsApp,
+        ClientPosition = c.ClientPosition,
+        OppositeParty = c.OppositeParty,
+        OppositePartyLawyer = c.OppositePartyLawyer,
+        SectionAct = c.SectionAct,
+        FIRNumber = c.FIRNumber,
+        CaseStage = c.CaseStage,
+        ReliefSought = c.ReliefSought,
+        FeeType = c.FeeType,
+        AgreedFees = c.AgreedFees,
+        AdvancePaid = c.AdvancePaid,
+        PerHearingFee = c.PerHearingFee,
+        VakalatnamaSigned = c.VakalatnamaSigned,
+        LimitationDate = c.LimitationDate,
+        NotifyClientOnHearing = c.NotifyClientOnHearing,
+        NotifyClientOnStatus = c.NotifyClientOnStatus,
+        LimitationAlertSent30 = c.LimitationAlertSent30,
+        LimitationAlertSent7 = c.LimitationAlertSent7,
+        LimitationAlertSent1 = c.LimitationAlertSent1,
+        CourtType = c.CourtType,
+        StateUT = c.StateUT,
+        District = c.District,
+        CourtHierarchyName = c.CourtHierarchyName,
+        CaseTypeCode = c.CaseTypeCode,
+        CaseNature = c.CaseNature,
+        TotalFeeLockedAt = c.TotalFeeLockedAt,
+        ClientType = c.ClientType,
+        ClientFatherName = c.ClientFatherName,
+        ClientAge = c.ClientAge,
+        ClientAddress = c.ClientAddress,
+        ClientIDDocumentType = c.ClientIDDocumentType,
+        CompanyName = c.CompanyName,
+        CompanyCIN = c.CompanyCIN,
+        CompanyGST = c.CompanyGST,
+        AuthorisedRepresentative = c.AuthorisedRepresentative,
+        AuthorisedRepresentativeDesignation = c.AuthorisedRepresentativeDesignation,
+        OppositePartiesJson = c.OppositePartiesJson,
+        OppositeCounselName = c.OppositeCounselName,
+        OppositeCounselPhone = c.OppositeCounselPhone,
+        OppositeCounselEnrollment = c.OppositeCounselEnrollment,
+        OppositeCounselCity = c.OppositeCounselCity,
+        ActsAndSectionsJson = c.ActsAndSectionsJson,
+        FIRDate = c.FIRDate,
+        PSDistrict = c.PSDistrict,
+        PSState = c.PSState,
+        NatureOfOffence = c.NatureOfOffence,
+        CaseNotesHtml = c.CaseNotesHtml,
+        PaymentMode = c.PaymentMode,
+        PaymentReference = c.PaymentReference,
+        HearingReminderEvening = c.HearingReminderEvening,
+        HearingReminderMorning = c.HearingReminderMorning,
+        LimitationAlertEnabled = c.LimitationAlertEnabled,
+        InvoiceOverdueAlert = c.InvoiceOverdueAlert,
+        CaseStageChangeAlert = c.CaseStageChangeAlert,
+        ClientWhatsAppEnabled = c.ClientWhatsAppEnabled,
+        PrivateNotesHtml = c.PrivateNotesHtml,
+        ClientInstructionsHtml = c.ClientInstructionsHtml,
+    };
 }

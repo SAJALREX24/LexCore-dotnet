@@ -46,11 +46,10 @@ public class AiController : ControllerBase
     public async Task<ActionResult<ApiResponse<ChatResponse>>> Chat([FromBody] ChatRequest request)
     {
         var userId = _tenant.GetCurrentUserId();
-        var firmId = _tenant.GetCurrentFirmId();
         var sw = Stopwatch.StartNew();
 
         // Quota check — prevents unlimited API usage
-        var quotaError = await CheckAndIncrementQuotaAsync(userId, firmId, "chat");
+        var quotaError = await CheckAndIncrementQuotaAsync(userId, "chat");
         if (quotaError != null)
             return StatusCode(429, ApiResponse<ChatResponse>.ErrorResponse(
                 quotaError, "QUOTA_EXCEEDED", 429));
@@ -59,7 +58,7 @@ public class AiController : ControllerBase
         var isLegal = await _legalValidator.IsLegalAsync(request.Message);
         if (!isLegal)
         {
-            await LogAuditAsync(userId, firmId, "chat_non_legal", null, 0, 0, null, (int)sw.ElapsedMilliseconds, true);
+            await LogAuditAsync(userId, "chat_non_legal", null, 0, 0, null, (int)sw.ElapsedMilliseconds, true);
             return Ok(ApiResponse<ChatResponse>.SuccessResponse(new ChatResponse(
                 "Main sirf kanoon aur legal matters mein madad kar sakta hoon. Koi legal sawaal ho toh zaroor poochein. ⚖️",
                 request.ConversationId ?? Guid.NewGuid(),
@@ -74,11 +73,11 @@ public class AiController : ControllerBase
             conversation = await _db.AiConversations
                 .Include(c => c.Messages.OrderBy(m => m.CreatedAt))
                 .FirstOrDefaultAsync(c => c.Id == request.ConversationId.Value && c.UserId == userId)
-                ?? CreateNewConversation(userId, firmId, request.CaseId);
+                ?? CreateNewConversation(userId, request.CaseId);
         }
         else
         {
-            conversation = CreateNewConversation(userId, firmId, request.CaseId);
+            conversation = CreateNewConversation(userId, request.CaseId);
             _db.AiConversations.Add(conversation);
             await _db.SaveChangesAsync();
         }
@@ -144,7 +143,7 @@ public class AiController : ControllerBase
             conversation.Title = request.Message.Length > 60 ? request.Message[..60] + "…" : request.Message;
 
         await _db.SaveChangesAsync();
-        await LogAuditAsync(userId, firmId, "chat", request.CaseId, inputTokens, outputTokens, null, (int)sw.ElapsedMilliseconds, true);
+        await LogAuditAsync(userId, "chat", request.CaseId, inputTokens, outputTokens, null, (int)sw.ElapsedMilliseconds, true);
 
         return Ok(ApiResponse<ChatResponse>.SuccessResponse(new ChatResponse(
             content,
@@ -157,11 +156,10 @@ public class AiController : ControllerBase
     public async Task<ActionResult<ApiResponse<DraftResponse>>> Draft([FromBody] DraftRequest request)
     {
         var userId = _tenant.GetCurrentUserId();
-        var firmId = _tenant.GetCurrentFirmId();
         var sw = Stopwatch.StartNew();
 
         // Quota check
-        var quotaError = await CheckAndIncrementQuotaAsync(userId, firmId, "draft");
+        var quotaError = await CheckAndIncrementQuotaAsync(userId, "draft");
         if (quotaError != null)
             return StatusCode(429, ApiResponse<DraftResponse>.ErrorResponse(
                 quotaError, "QUOTA_EXCEEDED", 429));
@@ -186,7 +184,7 @@ public class AiController : ControllerBase
 
         var draft = new AiDraft
         {
-            TenantId = firmId ?? userId,
+            TenantId = userId,
             UserId = userId,
             CaseId = request.CaseId,
             DocumentType = request.DocumentType,
@@ -199,7 +197,7 @@ public class AiController : ControllerBase
         _db.AiDrafts.Add(draft);
         await _db.SaveChangesAsync();
 
-        await LogAuditAsync(userId, firmId, "draft", request.CaseId, inputTokens, outputTokens, null, (int)sw.ElapsedMilliseconds, true);
+        await LogAuditAsync(userId, "draft", request.CaseId, inputTokens, outputTokens, null, (int)sw.ElapsedMilliseconds, true);
 
         return Ok(ApiResponse<DraftResponse>.SuccessResponse(new DraftResponse(draft.Id, content, request.DocumentType, true)));
     }
@@ -208,11 +206,10 @@ public class AiController : ControllerBase
     public async Task<ActionResult<ApiResponse<ResearchResponse>>> Research([FromBody] ResearchRequest request)
     {
         var userId = _tenant.GetCurrentUserId();
-        var firmId = _tenant.GetCurrentFirmId();
         var sw = Stopwatch.StartNew();
 
         // Quota check
-        var quotaError = await CheckAndIncrementQuotaAsync(userId, firmId, "research");
+        var quotaError = await CheckAndIncrementQuotaAsync(userId, "research");
         if (quotaError != null)
             return StatusCode(429, ApiResponse<ResearchResponse>.ErrorResponse(
                 quotaError, "QUOTA_EXCEEDED", 429));
@@ -222,7 +219,7 @@ public class AiController : ControllerBase
         if (cached != null)
         {
             var cachedCitations = ParseJsonList(cached.Citations);
-            await LogAuditAsync(userId, firmId, "research_cache_hit", request.CaseId, 0, 0, null, (int)sw.ElapsedMilliseconds, true);
+            await LogAuditAsync(userId, "research_cache_hit", request.CaseId, 0, 0, null, (int)sw.ElapsedMilliseconds, true);
             return Ok(ApiResponse<ResearchResponse>.SuccessResponse(new ResearchResponse(
                 cached.Result, cachedCitations, new List<string>(), true)));
         }
@@ -255,7 +252,7 @@ public class AiController : ControllerBase
         // Save research record
         var research = new AiResearch
         {
-            TenantId = firmId ?? userId,
+            TenantId = userId,
             UserId = userId,
             CaseId = request.CaseId,
             Query = request.Query,
@@ -270,7 +267,7 @@ public class AiController : ControllerBase
         // Save to cache
         await _researchCache.SaveToCacheAsync(request.Query, content, citationsJson);
 
-        await LogAuditAsync(userId, firmId, "research", request.CaseId, inputTokens, outputTokens, null, (int)sw.ElapsedMilliseconds, true);
+        await LogAuditAsync(userId, "research", request.CaseId, inputTokens, outputTokens, null, (int)sw.ElapsedMilliseconds, true);
 
         return Ok(ApiResponse<ResearchResponse>.SuccessResponse(new ResearchResponse(
             content, citations, new List<string>(), false)));
@@ -343,21 +340,20 @@ public class AiController : ControllerBase
         return Ok(ApiResponse<string>.SuccessResponse("Status updated"));
     }
 
-    private static AiConversation CreateNewConversation(Guid userId, Guid? firmId, Guid? caseId) =>
+    private static AiConversation CreateNewConversation(Guid userId, Guid? caseId) =>
         new()
         {
             UserId = userId,
-            TenantId = firmId ?? userId,
+            TenantId = userId,
             CaseId = caseId,
             ConversationType = "chat"
         };
 
     /// Checks and increments quota for the given action.
     /// Returns an error message if quota exceeded, null if allowed.
-    private async Task<string?> CheckAndIncrementQuotaAsync(
-        Guid userId, Guid? firmId, string action)
+    private async Task<string?> CheckAndIncrementQuotaAsync(Guid userId, string action)
     {
-        var tenantId = firmId ?? userId;
+        var tenantId = userId;
         var monthYear = DateTime.UtcNow.ToString("yyyy-MM");
 
         // Step 1: Ensure a quota row exists for this tenant+month.
@@ -474,12 +470,12 @@ public class AiController : ControllerBase
         return null; // slot reserved successfully
     }
 
-    private async Task LogAuditAsync(Guid userId, Guid? firmId, string action, Guid? caseId,
+    private async Task LogAuditAsync(Guid userId, string action, Guid? caseId,
         int inputTokens, int outputTokens, string? model, int latencyMs, bool success)
     {
         _db.AiAuditLogs.Add(new AiAuditLog
         {
-            TenantId = firmId ?? userId,
+            TenantId = userId,
             UserId = userId,
             ActionType = action,
             CaseId = caseId,
@@ -496,7 +492,7 @@ public class AiController : ControllerBase
         // Skip cache hits and non-legal responses (0 tokens).
         if (inputTokens + outputTokens > 0)
         {
-            var tenantId = firmId ?? userId;
+            var tenantId = userId;
             var monthYear = DateTime.UtcNow.ToString("yyyy-MM");
             var totalTokens = inputTokens + outputTokens;
 
