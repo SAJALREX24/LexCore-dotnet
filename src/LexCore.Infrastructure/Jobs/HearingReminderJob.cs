@@ -62,7 +62,7 @@ public class HearingReminderJob
                 );
 
                 // Create notification
-                await CreateNotification(hearing.FirmId, lawyer.Id, caseInfo.Title, hearing);
+                await CreateNotification(lawyer.Id, caseInfo.Title, hearing);
             }
 
             // Send to all assigned clients (without internal notes)
@@ -78,7 +78,7 @@ public class HearingReminderJob
                     hearing.CourtName ?? "Court"
                 );
 
-                await CreateNotification(hearing.FirmId, client.Id, caseInfo.Title, hearing);
+                await CreateNotification(client.Id, caseInfo.Title, hearing);
             }
 
             // Mark reminder as sent
@@ -94,7 +94,7 @@ public class HearingReminderJob
         }
     }
 
-    private async Task CreateNotification(Guid? firmId, Guid userId, string caseTitle, Hearing hearing)
+    private async Task CreateNotification(Guid userId, string caseTitle, Hearing hearing)
     {
         var notification = new Notification
         {

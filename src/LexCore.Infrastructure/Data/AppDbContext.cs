@@ -7,7 +7,6 @@ public class AppDbContext : DbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
-    public DbSet<Firm> Firms => Set<Firm>();
     public DbSet<User> Users => Set<User>();
     public DbSet<Case> Cases => Set<Case>();
     public DbSet<CaseLawyer> CaseLawyers => Set<CaseLawyer>();
@@ -18,7 +17,6 @@ public class AppDbContext : DbContext
     public DbSet<Chat> Chats => Set<Chat>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<Payment> Payments => Set<Payment>();
-    public DbSet<Subscription> Subscriptions => Set<Subscription>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<CaseNote> CaseNotes => Set<CaseNote>();
@@ -36,16 +34,6 @@ public class AppDbContext : DbContext
     {
         base.OnModelCreating(modelBuilder);
 
-        // Firm Configuration
-        modelBuilder.Entity<Firm>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.Slug).IsRequired().HasMaxLength(100);
-            entity.HasIndex(e => e.Slug).IsUnique();
-            entity.HasQueryFilter(e => e.DeletedAt == null);
-        });
-
         // User Configuration
         modelBuilder.Entity<User>(entity =>
         {
@@ -59,10 +47,6 @@ public class AppDbContext : DbContext
             entity.Property(e => e.City).HasMaxLength(100);
             entity.HasIndex(e => e.Email).IsUnique();
             entity.HasIndex(e => e.Phone);
-            entity.HasIndex(e => e.FirmId);
-            entity.HasOne(e => e.Firm).WithMany(f => f.Users)
-                .HasForeignKey(e => e.FirmId).IsRequired(false)
-                .OnDelete(DeleteBehavior.Cascade);
             entity.HasQueryFilter(e => e.DeletedAt == null);
         });
 
@@ -135,17 +119,12 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.CaseNumber)
                   .IsUnique()
                   .HasDatabaseName("IX_Cases_CaseNumber_Unique");
-            entity.HasIndex(e => e.FirmId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.CourtType);
-            entity.HasIndex(e => new { e.FirmId, e.Status })
-                  .HasDatabaseName("IX_Cases_FirmId_Status");
             entity.HasIndex(e => new { e.Status, e.LimitationDate })
                   .HasDatabaseName("IX_Cases_Status_LimitationDate")
                   .HasFilter("\"LimitationDate\" IS NOT NULL");
 
-            entity.HasOne(e => e.Firm).WithMany(f => f.Cases)
-                  .HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
             entity.HasQueryFilter(e => e.DeletedAt == null);
         });
 
@@ -200,7 +179,6 @@ public class AppDbContext : DbContext
             entity.Property(e => e.AIDraftStatus).HasMaxLength(20);
 
             // Indexes
-            entity.HasIndex(e => e.FirmId);
             entity.HasIndex(e => new { e.CaseId, e.DocumentCategory })
                   .HasDatabaseName("IX_Documents_CaseId_Category");
 
@@ -210,8 +188,6 @@ public class AppDbContext : DbContext
                   .IsRequired(false)
                   .OnDelete(DeleteBehavior.SetNull);
 
-            entity.HasOne(e => e.Firm).WithMany(f => f.Documents)
-                  .HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Case).WithMany(c => c.Documents)
                   .HasForeignKey(e => e.CaseId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Uploader).WithMany(u => u.UploadedDocuments)
@@ -231,10 +207,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Hearing>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.FirmId);
             entity.HasIndex(e => e.HearingDate);
             entity.HasIndex(e => e.Status);
-            entity.HasOne(e => e.Firm).WithMany(f => f.Hearings).HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Case).WithMany(c => c.Hearings).HasForeignKey(e => e.CaseId).OnDelete(DeleteBehavior.Cascade);
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.Property(e => e.Outcome).HasMaxLength(50);
@@ -247,8 +221,6 @@ public class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Message).IsRequired();
-            entity.HasIndex(e => e.FirmId);
-            entity.HasOne(e => e.Firm).WithMany(f => f.Chats).HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Case).WithMany(c => c.Chats).HasForeignKey(e => e.CaseId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Sender).WithMany(u => u.SentChats).HasForeignKey(e => e.SenderId).OnDelete(DeleteBehavior.Restrict);
             entity.HasQueryFilter(e => e.DeletedAt == null);
@@ -262,13 +234,11 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.GstAmount).HasPrecision(18, 2);
             entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
-            entity.HasIndex(e => e.FirmId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.DueDate);
             entity.HasIndex(e => e.CaseId);       // for case Bills tab queries
             entity.HasIndex(e => e.PaymentDate);  // for analytics queries
-            entity.HasIndex(e => new { e.InvoiceNumber, e.FirmId }).IsUnique();
-            entity.HasOne(e => e.Firm).WithMany(f => f.Invoices).HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => e.InvoiceNumber).IsUnique();
             entity.HasOne(e => e.Case).WithMany(c => c.Invoices).HasForeignKey(e => e.CaseId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Client).WithMany(u => u.ClientInvoices).HasForeignKey(e => e.ClientId).IsRequired(false).OnDelete(DeleteBehavior.Restrict);
             entity.Property(e => e.ClientName).HasMaxLength(200);
@@ -287,13 +257,9 @@ public class AppDbContext : DbContext
             entity.Property(e => e.PaymentType).HasMaxLength(20);
             entity.Property(e => e.Status).HasMaxLength(50);
 
-            entity.HasIndex(e => e.FirmId);
             entity.HasIndex(e => e.InvoiceId);
             entity.HasIndex(e => e.CaseId);
             entity.HasIndex(e => e.PaidAt);
-
-            entity.HasOne(e => e.Firm).WithMany()
-                  .HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
 
             // InvoiceId nullable — for advance payments CaseId is set, InvoiceId is null
             entity.HasOne(e => e.Invoice).WithMany(i => i.Payments)
@@ -310,22 +276,11 @@ public class AppDbContext : DbContext
             entity.HasQueryFilter(e => e.DeletedAt == null);
         });
 
-        // Subscription Configuration
-        modelBuilder.Entity<Subscription>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.FirmId);
-            entity.HasOne(e => e.Firm).WithMany(f => f.Subscriptions).HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
-            entity.HasQueryFilter(e => e.DeletedAt == null);
-        });
-
         // AuditLog Configuration
         modelBuilder.Entity<AuditLog>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.FirmId);
             entity.HasIndex(e => e.Timestamp);
-            entity.HasOne(e => e.Firm).WithMany(f => f.AuditLogs).HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.User).WithMany(u => u.AuditLogs).HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.SetNull);
             // INTENTIONALLY NO HasQueryFilter — audit logs are permanent legal evidence
             // They must NEVER be soft-deleted or filtered out under any circumstance

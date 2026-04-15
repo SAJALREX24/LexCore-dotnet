@@ -19,7 +19,6 @@ public class AuditService : IAuditService
     {
         var auditLog = new AuditLog
         {
-            FirmId = _tenantService.GetCurrentFirmId(),
             UserId = _tenantService.GetCurrentUserId() != Guid.Empty ? _tenantService.GetCurrentUserId() : null,
             Action = action,
             EntityType = entityType,

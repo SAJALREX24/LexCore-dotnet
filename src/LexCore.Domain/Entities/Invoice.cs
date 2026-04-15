@@ -2,7 +2,7 @@ using LexCore.Domain.Enums;
 
 namespace LexCore.Domain.Entities;
 
-public class Invoice : TenantEntity
+public class Invoice : BaseEntity
 {
     public Guid CaseId { get; set; }
     public Case? Case { get; set; }

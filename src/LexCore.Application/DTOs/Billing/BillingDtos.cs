@@ -3,22 +3,6 @@ using LexCore.Domain.Enums;
 
 namespace LexCore.Application.DTOs.Billing;
 
-public class CreateSubscriptionRequest
-{
-    [Required]
-    public SubscriptionPlan Plan { get; set; }
-}
-
-public class SubscriptionDto
-{
-    public Guid Id { get; set; }
-    public string Plan { get; set; } = string.Empty;
-    public string Status { get; set; } = string.Empty;
-    public DateTime StartDate { get; set; }
-    public DateTime? EndDate { get; set; }
-    public string? RazorpaySubscriptionId { get; set; }
-}
-
 public class CreateInvoiceRequest
 {
     [Required]

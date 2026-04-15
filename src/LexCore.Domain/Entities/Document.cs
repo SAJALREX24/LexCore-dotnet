@@ -1,6 +1,6 @@
 namespace LexCore.Domain.Entities;
 
-public class Document : TenantEntity
+public class Document : BaseEntity
 {
     public Guid CaseId { get; set; }
     public Case? Case { get; set; }

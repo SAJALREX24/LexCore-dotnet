@@ -48,7 +48,15 @@
       "Read(//c/Program Files/GitHub CLI//**)",
       "Read(//c/Users/Dell/AppData/Local/Programs/**)",
       "Bash(/c/Program Files/GitHub CLI/gh.exe auth:*)",
-      "Bash(/c/Program Files/GitHub CLI/gh.exe repo:*)"
+      "Bash(/c/Program Files/GitHub CLI/gh.exe repo:*)",
+      "Bash(rm src/LexCore.Domain/Entities/Firm.cs)",
+      "Bash(rm src/LexCore.Application/DTOs/Firms/FirmDtos.cs)",
+      "Bash(rmdir src/LexCore.Application/DTOs/Firms)",
+      "Bash(rm src/LexCore.Domain/Entities/Subscription.cs)",
+      "Bash(rm src/LexCore.Domain/Enums/SubscriptionPlan.cs)",
+      "Bash(psql \"Host=localhost;Port=5432;Database=lexcore;Username=postgres;Password=postgres\" -c \"\\\\dt\")",
+      "Bash(PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d lexcore -c \"\\\\dt\")",
+      "Bash(PGPASSWORD=postgres /c/Program Files/PostgreSQL/16/bin/psql.exe:*)"
     ]
   }
 }

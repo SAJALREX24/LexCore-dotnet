@@ -1,6 +1,6 @@
 namespace LexCore.Domain.Entities;
 
-public class Payment : TenantEntity
+public class Payment : BaseEntity
 {
     // For invoice payments: InvoiceId is set, CaseId is null
     // For advance payments: CaseId is set, InvoiceId is null

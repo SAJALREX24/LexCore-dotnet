@@ -3,7 +3,7 @@ using LexCore.Domain.Enums;
 
 namespace LexCore.Domain.Entities;
 
-public class Case : TenantEntity
+public class Case : BaseEntity
 {
     public string CaseNumber { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;

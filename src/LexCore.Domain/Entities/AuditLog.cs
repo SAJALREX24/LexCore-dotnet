@@ -1,6 +1,6 @@
 namespace LexCore.Domain.Entities;
 
-public class AuditLog : TenantEntity
+public class AuditLog : BaseEntity
 {
     public Guid? UserId { get; set; }
     public User? User { get; set; }

@@ -2,7 +2,7 @@ using LexCore.Domain.Enums;
 
 namespace LexCore.Domain.Entities;
 
-public class Hearing : TenantEntity
+public class Hearing : BaseEntity
 {
     public Guid CaseId { get; set; }
     public Case? Case { get; set; }

@@ -1,6 +1,6 @@
 namespace LexCore.Domain.Entities;
 
-public class Chat : TenantEntity
+public class Chat : BaseEntity
 {
     public Guid CaseId { get; set; }
     public Case? Case { get; set; }

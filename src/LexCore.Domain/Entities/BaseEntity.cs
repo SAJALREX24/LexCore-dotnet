@@ -9,8 +9,3 @@ public abstract class BaseEntity
     public bool IsDeleted => DeletedAt.HasValue;
 }
 
-public abstract class TenantEntity : BaseEntity
-{
-    public Guid? FirmId { get; set; }
-    public Firm? Firm { get; set; }
-}

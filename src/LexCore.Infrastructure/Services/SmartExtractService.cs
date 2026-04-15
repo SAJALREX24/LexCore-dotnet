@@ -24,9 +24,8 @@ public class SmartExtractService : ISmartExtractService
 
     public async Task<SmartExtract> ExtractFromCaseContextAsync(Guid caseId, string purpose, Guid userId)
     {
-        // Security: verify the requesting user owns this case before extracting
-        // For firm lawyers: case must belong to their firm
-        // For solo lawyers: they must be in CaseLawyers
+        // Security: verify the requesting user owns this case before extracting.
+        // v1 solo-only: ownership is established via CaseLawyers junction table.
         var caseEntity = await _db.Cases
             .Include(c => c.CaseLawyers).ThenInclude(cl => cl.Lawyer)
             .Include(c => c.CaseClients).ThenInclude(cc => cc.Client)
@@ -34,11 +33,7 @@ public class SmartExtractService : ISmartExtractService
             .Include(c => c.Documents)
             .FirstOrDefaultAsync(c =>
                 c.Id == caseId &&
-                (c.FirmId.HasValue
-                    ? c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null) ||
-                      c.FirmId != null  // firm lawyers validated at controller level
-                    : c.FirmId == null &&
-                      c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)));
+                c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
 
         if (caseEntity == null)
         {

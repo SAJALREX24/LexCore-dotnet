@@ -15,7 +15,7 @@ public class PdfService : IPdfService
         QuestPDF.Settings.License = LicenseType.Community;
     }
 
-    public byte[] GenerateInvoicePdf(Invoice invoice, Firm firm, User client, User? lawyer = null)
+    public byte[] GenerateInvoicePdf(Invoice invoice, User client, User? lawyer = null)
     {
         var document = QuestPDF.Fluent.Document.Create(container =>
         {
@@ -25,7 +25,7 @@ public class PdfService : IPdfService
                 page.Margin(40);
                 page.DefaultTextStyle(x => x.FontSize(10));
 
-                page.Header().Element(c => ComposeHeader(c, firm, invoice, lawyer));
+                page.Header().Element(c => ComposeHeader(c, invoice, lawyer));
                 page.Content().Element(c => ComposeContent(c, invoice, client));
                 page.Footer().Element(ComposeFooter);
             });
@@ -34,18 +34,16 @@ public class PdfService : IPdfService
         return document.GeneratePdf();
     }
 
-    private void ComposeHeader(IContainer container, Firm firm, Invoice invoice, User? lawyer = null)
+    private void ComposeHeader(IContainer container, Invoice invoice, User? lawyer = null)
     {
+        // v1 solo-only: use lawyer's own name/details as the practice header.
+        var practiceName = lawyer?.Name ?? "LexCore Legal";
         container.Row(row =>
         {
             row.RelativeItem().Column(column =>
             {
-                column.Item().Text(firm.Name).FontSize(20).Bold().FontColor(Colors.Blue.Darken2);
-                if (!string.IsNullOrEmpty(firm.Address))
-                    column.Item().Text(firm.Address).FontSize(9).FontColor(Colors.Grey.Darken1);
-                if (!string.IsNullOrEmpty(firm.GstNumber))
-                    column.Item().Text($"GSTIN: {firm.GstNumber}").FontSize(9).FontColor(Colors.Grey.Darken1);
-                // Bar enrollment number — show for solo lawyer or firm owner
+                column.Item().Text(practiceName).FontSize(20).Bold().FontColor(Colors.Blue.Darken2);
+                // Bar enrollment number
                 var barEnrollment = lawyer?.BarEnrollmentNumber;
                 if (!string.IsNullOrEmpty(barEnrollment))
                     column.Item().Text($"Bar Enr. No: {barEnrollment}").FontSize(9).FontColor(Colors.Grey.Darken1);
