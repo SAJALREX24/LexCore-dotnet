@@ -3,7 +3,7 @@ using AspNetCoreRateLimit;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Hangfire;
-using Hangfire.Redis.StackExchange;
+using Hangfire.PostgreSql;
 using LexCore.Application.Configuration;
 using LexCore.Application.Interfaces;
 using LexCore.Application.Validators;
@@ -44,10 +44,14 @@ public static class ServiceCollectionExtensions
             }
         }
 
-      // Hangfire
+        // Hangfire — persistent PostgreSQL storage.
+        // Uses the same connection string as EF Core (DefaultConnection).
+        // Jobs survive backend restarts. Tables auto-created by Hangfire.
+        var hangfireConn = configuration.GetConnectionString("DefaultConnection");
         services.AddHangfire(config =>
         {
-            config.UseInMemoryStorage();
+            config.UsePostgreSqlStorage(options =>
+                options.UseNpgsqlConnection(hangfireConn));
         });
         services.AddHangfireServer();
 
@@ -132,7 +136,6 @@ public static class ServiceCollectionExtensions
         services.AddAuthorization(options =>
         {
             options.AddPolicy("Lawyer", policy => policy.RequireRole("Lawyer", "SuperAdmin"));
-            options.AddPolicy("Client", policy => policy.RequireRole("Lawyer", "Client", "SuperAdmin"));
             options.AddPolicy("SuperAdmin", policy => policy.RequireRole("SuperAdmin"));
         });
 

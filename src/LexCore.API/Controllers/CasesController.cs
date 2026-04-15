@@ -122,7 +122,26 @@ public class CasesController : ControllerBase
             };
 
             await _context.Cases.AddAsync(newCase);
-            await _context.SaveChangesAsync();
+
+            // Retry on CaseNumber collision (unique constraint).
+            // Race condition: two concurrent creates compute same number.
+            var caseNumberRetries = 0;
+            while (true)
+            {
+                try
+                {
+                    await _context.SaveChangesAsync();
+                    break; // success
+                }
+                catch (DbUpdateException) when (caseNumberRetries < 3)
+                {
+                    caseNumberRetries++;
+                    _context.Entry(newCase).State = EntityState.Detached;
+                    newCase.Id = Guid.NewGuid();
+                    newCase.CaseNumber = await GenerateCaseNumber(userId);
+                    await _context.Cases.AddAsync(newCase);
+                }
+            }
 
             // Solo lawyer auto-assignment
             await _context.CaseLawyers.AddAsync(
@@ -201,7 +220,6 @@ public class CasesController : ControllerBase
                 FiledDate = c.FiledDate,
                 CreatedAt = c.CreatedAt,
                 LawyersCount = c.CaseLawyers.Count(cl => cl.DeletedAt == null),
-                ClientsCount = c.CaseClients.Count(cc => cc.DeletedAt == null),
                 ClientName = c.ClientName,
                 CaseStage = c.CaseStage,
                 LimitationDate = c.LimitationDate,
@@ -231,8 +249,6 @@ public class CasesController : ControllerBase
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers.Where(cl => cl.DeletedAt == null))
                 .ThenInclude(cl => cl.Lawyer)
-            .Include(c => c.CaseClients.Where(cc => cc.DeletedAt == null))
-                .ThenInclude(cc => cc.Client)
             .FirstOrDefaultAsync(c =>
                 c.Id == id &&
                 c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));

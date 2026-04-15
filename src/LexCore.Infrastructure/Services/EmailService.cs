@@ -105,29 +105,6 @@ public class EmailService : IEmailService
         await SendEmailAsync(to, "Reset Your LexCore Password", body);
     }
 
-    public async Task SendInviteEmailAsync(string to, string firmName, string inviterName, string token, string role)
-    {
-        var baseUrl = _configuration["App:BaseUrl"];
-        var inviteUrl = $"{baseUrl}/accept-invite?token={token}";
-
-        var body = $@"
-        <html>
-        <body style='font-family: Arial, sans-serif;'>
-            <h2>You're Invited to Join {firmName} on LexCore!</h2>
-            <p>{inviterName} has invited you to join their law firm as a {role}.</p>
-            <p>Click the link below to accept the invitation and set up your account:</p>
-            <p><a href='{inviteUrl}' style='background-color: #9C27B0; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;'>Accept Invitation</a></p>
-            <p>Or copy and paste this link in your browser:</p>
-            <p>{inviteUrl}</p>
-            <p>This invitation will expire in 7 days.</p>
-            <br/>
-            <p>Best regards,<br/>The LexCore Team</p>
-        </body>
-        </html>";
-
-        await SendEmailAsync(to, $"Invitation to Join {firmName} on LexCore", body);
-    }
-
     public async Task SendHearingReminderAsync(string to, string name, string caseTitle, DateTime hearingDate, TimeSpan hearingTime, string courtName)
     {
         var body = $@"

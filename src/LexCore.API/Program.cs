@@ -87,6 +87,22 @@ var app = builder.Build();
 // ForwardedHeaders: required when running behind Nginx/Cloudflare/any proxy.
 // Without this, the real client IP and HTTPS scheme are invisible to ASP.NET.
 // This affects: IP logging in audit trails, RemoteIpAddress in controllers.
+    // Security response headers — defense in depth against
+    // clickjacking, MIME sniffing, and information leakage.
+    app.Use(async (context, next) =>
+    {
+        context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+        context.Response.Headers.Append("X-Frame-Options", "DENY");
+        context.Response.Headers.Append("Referrer-Policy", "no-referrer");
+        context.Response.Headers.Append("X-XSS-Protection", "0");
+        context.Response.Headers.Append("Permissions-Policy",
+            "camera=(), microphone=(), geolocation=()");
+        // HSTS is NOT added here — it must only be set when TLS
+        // is confirmed (production behind Nginx/Cloudflare).
+        // app.UseHsts() handles that automatically in Production.
+        await next();
+    });
+
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders =

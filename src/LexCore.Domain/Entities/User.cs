@@ -17,8 +17,6 @@ public class User : BaseEntity
     public string? PhoneOtp { get; set; }
     public DateTime? PhoneOtpExpiry { get; set; }
     public bool IsPhoneVerified { get; set; }
-    public string? InviteToken { get; set; }
-    public DateTime? InviteTokenExpiry { get; set; }
     public string? RefreshToken { get; set; }
     public DateTime? RefreshTokenExpiry { get; set; }
     public DateTime? LastLogin { get; set; }

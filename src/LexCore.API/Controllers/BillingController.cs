@@ -56,32 +56,58 @@ public class BillingController : ControllerBase
         var resolvedClientName = caseEntity.ClientName ?? caseEntity.Title ?? "Client";
         var resolvedClientPhone = caseEntity.ClientWhatsApp ?? caseEntity.ClientPhone;
 
-        var invoiceNumber = await GenerateInvoiceNumber(userId);
+        // GST compliance: If client explicitly sends GstAmount (even 0),
+        // use it — this covers GST-exempt lawyers (turnover < ₹20L).
+        // If null, default to 18% with proper paise-level rounding
+        // per CGST Rules Rule 34A.
         var gstAmount = request.GstAmount.HasValue
-            ? request.GstAmount.Value
-            : request.Amount * 0.18m;
-        var totalAmount = request.Amount + gstAmount;
+            ? Math.Round(request.GstAmount.Value, 2, MidpointRounding.AwayFromZero)
+            : Math.Round(request.Amount * 0.18m, 2, MidpointRounding.AwayFromZero);
+        var totalAmount = Math.Round(request.Amount + gstAmount, 2, MidpointRounding.AwayFromZero);
 
-        var invoice = new Invoice
+        // Retry loop handles concurrent invoice creation race condition.
+        // If two requests generate the same number, the unique index on
+        // InvoiceNumber causes DbUpdateException. We catch it and retry
+        // with a fresh number (max 3 attempts).
+        const int maxRetries = 3;
+        Invoice invoice = null!;
+        for (var attempt = 0; attempt < maxRetries; attempt++)
         {
-            CaseId = request.CaseId,
-            ClientName = resolvedClientName,
-            ClientPhone = resolvedClientPhone,
-            Amount = request.Amount,
-            GstAmount = gstAmount,
-            TotalAmount = totalAmount,
-            Status = InvoiceStatus.Draft,
-            DueDate = request.DueDate.HasValue
-                ? DateTime.SpecifyKind(request.DueDate.Value, DateTimeKind.Utc)
-                : DateTime.UtcNow.AddDays(30),
-            InvoiceNumber = invoiceNumber,
-            Description = request.Description,
-            LineItems = request.LineItems,
-            IsInterState = request.IsInterState
-        };
+            var invoiceNumber = await GenerateInvoiceNumber(userId);
 
-        await _context.Invoices.AddAsync(invoice);
-        await _context.SaveChangesAsync();
+            invoice = new Invoice
+            {
+                CaseId = request.CaseId,
+                ClientName = resolvedClientName,
+                ClientPhone = resolvedClientPhone,
+                Amount = request.Amount,
+                GstAmount = gstAmount,
+                TotalAmount = totalAmount,
+                Status = InvoiceStatus.Draft,
+                DueDate = request.DueDate.HasValue
+                    ? DateTime.SpecifyKind(request.DueDate.Value, DateTimeKind.Utc)
+                    : DateTime.UtcNow.AddDays(30),
+                InvoiceNumber = invoiceNumber,
+                Description = request.Description,
+                LineItems = request.LineItems,
+                IsInterState = request.IsInterState
+            };
+
+            await _context.Invoices.AddAsync(invoice);
+
+            try
+            {
+                await _context.SaveChangesAsync();
+                break; // success
+            }
+            catch (DbUpdateException) when (attempt < maxRetries - 1)
+            {
+                // Unique constraint violation on InvoiceNumber — retry
+                _context.Entry(invoice).State = EntityState.Detached;
+                continue;
+            }
+        }
+
         await _auditService.LogAsync("INVOICE_CREATED", "Invoice", invoice.Id,
             ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
 
@@ -206,9 +232,9 @@ public class BillingController : ControllerBase
             invoice.Amount = request.Amount.Value;
             var gst = request.GstAmount.HasValue
                 ? request.GstAmount.Value
-                : invoice.Amount * 0.18m;
+                : Math.Round(invoice.Amount * 0.18m, 2, MidpointRounding.AwayFromZero);
             invoice.GstAmount = gst;
-            invoice.TotalAmount = invoice.Amount + gst;
+            invoice.TotalAmount = Math.Round(invoice.Amount + gst, 2, MidpointRounding.AwayFromZero);
         }
 
         if (request.Description != null)
@@ -227,9 +253,9 @@ public class BillingController : ControllerBase
             {
                 var gst = request.GstAmount.HasValue
                     ? request.GstAmount.Value
-                    : invoice.Amount * 0.18m;
+                    : Math.Round(invoice.Amount * 0.18m, 2, MidpointRounding.AwayFromZero);
                 invoice.GstAmount = gst;
-                invoice.TotalAmount = invoice.Amount + gst;
+                invoice.TotalAmount = Math.Round(invoice.Amount + gst, 2, MidpointRounding.AwayFromZero);
             }
         }
 
@@ -471,12 +497,18 @@ public class BillingController : ControllerBase
 
     private async Task<string> GenerateInvoiceNumber(Guid userId)
     {
-        var year = DateTime.UtcNow.Year;
+        // Indian Financial Year: April 1 to March 31.
+        // FY 2026-27 means April 2026 through March 2027.
+        var now = DateTime.UtcNow;
+        var fyStart = now.Month >= 4 ? now.Year : now.Year - 1;
+        var fyEnd = fyStart + 1;
+        var fyLabel = $"{fyStart % 100:D2}{fyEnd % 100:D2}"; // e.g. "2627"
 
         var existing = await _context.Invoices
             .IgnoreQueryFilters()
             .Where(i =>
-                i.CreatedAt.Year == year &&
+                i.CreatedAt >= new DateTime(fyStart, 4, 1, 0, 0, 0, DateTimeKind.Utc) &&
+                i.CreatedAt < new DateTime(fyEnd, 4, 1, 0, 0, 0, DateTimeKind.Utc) &&
                 i.Case != null &&
                 i.Case.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null))
             .Select(i => i.InvoiceNumber)
@@ -490,7 +522,7 @@ public class BillingController : ControllerBase
                 maxSeq = Math.Max(maxSeq, seq);
         }
 
-        return $"INV-{year}-{(maxSeq + 1):D5}";
+        return $"INV-{fyLabel}-{(maxSeq + 1):D5}";
     }
 
     private static InvoiceDto MapToDto(Invoice invoice, string? caseTitle) => new InvoiceDto
