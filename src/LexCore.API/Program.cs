@@ -79,6 +79,11 @@ var app = builder.Build();
 
 // Configure pipeline
 
+// TODO [CAT-6]: Production deployment must set KnownProxies
+// or KnownNetworks to the Cloudflare Tunnel / Nginx IP range.
+// Without this, X-Forwarded-For headers can be spoofed,
+// polluting audit logs and bypassing IP-based rate limits.
+// Dev environment is trusted so this is acceptable here.
 // ForwardedHeaders: required when running behind Nginx/Cloudflare/any proxy.
 // Without this, the real client IP and HTTPS scheme are invisible to ASP.NET.
 // This affects: IP logging in audit trails, RemoteIpAddress in controllers.

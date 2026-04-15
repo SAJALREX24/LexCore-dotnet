@@ -1,0 +1,703 @@
+====================================================================
+LEXCORE AI — STEP 14-PRE PHASE B
+SOLO LAWYER CLEANUP: SERVICES + MIDDLEWARE + AUTH + DTOS
+====================================================================
+
+YOU ARE A 30+ YEAR EXPERIENCED ASP.NET CORE DEVELOPER AND SECURITY
+ENGINEER. READ THIS ENTIRE FILE BEFORE TOUCHING A SINGLE LINE.
+
+This is Phase B. Phase A has already been executed. The Domain
+layer and AppDbContext are clean of firm references. The database
+has been migrated. The project still does NOT compile — many
+controllers and DTOs still reference FirmId, GetCurrentFirmId(),
+the Firm entity, and the Subscription entity.
+
+Phase B fixes the middle layer: services, middleware, interfaces,
+DTOs, and AuthController. After Phase B, the project still will
+not build completely — but the interfaces and services layer will
+be clean, so Phase C only has to deal with controller bodies.
+
+Do NOT touch anything in Phase A's scope (Domain, AppDbContext,
+migrations). Do NOT touch Phase C's scope (controller query
+bodies — except AuthController which is handled here).
+
+Backend project: C:\Users\Dell\Desktop\LexCore-dotnet\
+
+====================================================================
+PRE-FLIGHT
+====================================================================
+
+1. Verify you are on the `step14pre-solo-cleanup` branch:
+   git branch --show-current
+
+2. Verify Phase A commit is present:
+   git log --oneline -5
+   The most recent commit should be the Phase A commit.
+
+3. Before starting, create a savepoint:
+   git commit --allow-empty -m "Phase B start"
+
+====================================================================
+INVIOLABLE RULES
+====================================================================
+
+1. Do NOT touch any file in src/LexCore.Domain/ — that was Phase A.
+2. Do NOT touch AppDbContext.cs — that was Phase A.
+3. Do NOT touch any Migration files — that was Phase A.
+4. Do NOT touch controller QUERY BODIES (the LINQ expressions
+   that use firmId.HasValue ? ... : ...). Those are Phase C.
+5. Do NOT touch the Flutter project.
+6. Tenant isolation currently uses `_tenantService.GetCurrentFirmId()`.
+   In Phase B we will DELETE this method from both the interface
+   and the implementation. Phase C controllers will then fail to
+   compile on this method call, which becomes Phase C's checklist.
+7. The JWT token currently contains a `firmId` claim. Phase B
+   removes this claim from token generation. Existing tokens in
+   circulation become technically invalid for reading firmId but
+   since nothing reads firmId after this phase, that is fine.
+   Users do NOT need to log in again.
+
+====================================================================
+TASK 1 — ITenantService INTERFACE
+====================================================================
+
+FILE: backend/src/LexCore.Application/Interfaces/ITenantService.cs
+
+Current (approximate) content:
+
+    public interface ITenantService
+    {
+        Guid? GetCurrentFirmId();
+        Guid GetCurrentUserId();
+        string GetCurrentUserRole();
+        void SetTenantContext(Guid? firmId, Guid userId, string role);
+    }
+
+Replace with:
+
+    namespace LexCore.Application.Interfaces;
+
+    public interface ITenantService
+    {
+        Guid GetCurrentUserId();
+        string GetCurrentUserRole();
+        void SetTenantContext(Guid userId, string role);
+    }
+
+Two changes:
+- Removed `Guid? GetCurrentFirmId()`
+- `SetTenantContext` no longer takes a firmId parameter
+
+====================================================================
+TASK 2 — TenantService IMPLEMENTATION
+====================================================================
+
+FILE: backend/src/LexCore.Infrastructure/Services/TenantService.cs
+
+Replace the ENTIRE file with:
+
+    using LexCore.Application.Interfaces;
+
+    namespace LexCore.Infrastructure.Services;
+
+    public class TenantService : ITenantService
+    {
+        private Guid _userId;
+        private string _role = string.Empty;
+
+        public Guid GetCurrentUserId() => _userId;
+        public string GetCurrentUserRole() => _role;
+
+        public void SetTenantContext(Guid userId, string role)
+        {
+            _userId = userId;
+            _role = role;
+        }
+    }
+
+====================================================================
+TASK 3 — TenantMiddleware
+====================================================================
+
+FILE: backend/src/LexCore.API/Middleware/TenantMiddleware.cs
+
+Replace the ENTIRE file with:
+
+    using System.Security.Claims;
+    using LexCore.Application.Interfaces;
+
+    namespace LexCore.API.Middleware;
+
+    public class TenantMiddleware
+    {
+        private readonly RequestDelegate _next;
+
+        public TenantMiddleware(RequestDelegate next)
+        {
+            _next = next;
+        }
+
+        public async Task InvokeAsync(HttpContext context, ITenantService tenantService)
+        {
+            if (context.User.Identity?.IsAuthenticated == true)
+            {
+                var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var roleClaim = context.User.FindFirst(ClaimTypes.Role)?.Value;
+
+                if (Guid.TryParse(userIdClaim, out var userId) &&
+                    !string.IsNullOrEmpty(roleClaim))
+                {
+                    tenantService.SetTenantContext(userId, roleClaim);
+                }
+            }
+
+            await _next(context);
+        }
+    }
+
+====================================================================
+TASK 4 — ITokenService INTERFACE
+====================================================================
+
+FILE: backend/src/LexCore.Application/Interfaces/ITokenService.cs
+
+Find the method signature:
+
+    string GenerateAccessToken(Guid userId, Guid? firmId, string email, string role, string name);
+
+Replace with:
+
+    string GenerateAccessToken(Guid userId, string email, string role, string name);
+
+Also remove any other method that takes firmId, if present.
+
+====================================================================
+TASK 5 — TokenService IMPLEMENTATION
+====================================================================
+
+FILE: backend/src/LexCore.Infrastructure/Services/TokenService.cs
+
+5.1 — Update the GenerateAccessToken signature
+
+Change:
+
+    public string GenerateAccessToken(Guid userId, Guid? firmId, string email, string role, string name)
+
+To:
+
+    public string GenerateAccessToken(Guid userId, string email, string role, string name)
+
+5.2 — Remove the firmId claim from the claims array
+
+Find the claims array in GenerateAccessToken. It currently contains:
+
+    new Claim("firmId", firmId?.ToString() ?? string.Empty),
+
+Delete this line entirely.
+
+5.3 — JWT lifetime reduction (bonus security fix)
+
+Find:
+
+    expires: DateTime.UtcNow.AddHours(24),
+
+Change to:
+
+    expires: DateTime.UtcNow.AddMinutes(60),
+
+This reduces JWT lifetime from 24 hours to 1 hour. Refresh token
+handling already exists and is unchanged.
+
+====================================================================
+TASK 6 — AUTH DTOS: REMOVE FIRM FIELDS, DELETE INVITE DTOS
+====================================================================
+
+FILE: backend/src/LexCore.Application/DTOs/Auth/AuthDtos.cs
+
+6.1 — Remove firm fields from UserDto
+
+Find the UserDto class. Delete these two lines:
+
+    public Guid? FirmId { get; set; }
+    public string? FirmName { get; set; }
+
+6.2 — Delete the InviteUserRequest class entirely
+
+Find and remove:
+
+    public class InviteUserRequest { ... }
+
+6.3 — Delete the AcceptInviteRequest class entirely
+
+Find and remove:
+
+    public class AcceptInviteRequest { ... }
+
+If there is a CreateSubscriptionRequest DTO anywhere in the DTOs
+folder, delete that file or class too. Also delete any
+RazorpayWebhookPayload DTOs related to subscriptions (NOT the
+ones used for invoice payments — those we keep).
+
+====================================================================
+TASK 7 — AUTH VALIDATORS: REMOVE INVITE VALIDATOR
+====================================================================
+
+FILE: backend/src/LexCore.Application/Validators/AuthValidators.cs
+
+Delete the entire `InviteUserRequestValidator` class.
+
+Leave RegisterLawyerRequestValidator, LoginRequestValidator,
+ResetPasswordRequestValidator intact.
+
+====================================================================
+TASK 8 — AUTHCONTROLLER: FIX REGISTRATION + LOGIN
+====================================================================
+
+FILE: backend/src/LexCore.API/Controllers/AuthController.cs
+
+This is the largest Phase B change. AuthController has multiple
+firm references and a critical security bug (CAT-1 from the audit)
+that we fix here as a bonus.
+
+8.1 — Register method: fix CAT-1 + remove firm references
+
+Find the `Register` method. Inside, locate the two places where
+a new or existing user gets `IsVerified = true` and
+`IsPhoneVerified = true` BEFORE OTP has been verified.
+
+For the `existingByPhone` reuse branch — find:
+
+    existingByPhone.IsVerified = true;
+    existingByPhone.IsPhoneVerified = true;
+
+Change to:
+
+    existingByPhone.IsVerified = false;
+    existingByPhone.IsPhoneVerified = false;
+
+For the new user creation branch — find:
+
+    var user = new User
+    {
+        Name = request.Name,
+        ...
+        IsVerified = true,
+        IsPhoneVerified = true,
+        ...
+    };
+
+Change the two flags to `false`:
+
+    IsVerified = false,
+    IsPhoneVerified = false,
+
+8.2 — Register method: fix token generation calls
+
+Find every call to `_tokenService.GenerateAccessToken(...)` in
+AuthController and change:
+
+    _tokenService.GenerateAccessToken(
+        user.Id, user.FirmId, user.Email, user.Role.ToString(), user.Name);
+
+To:
+
+    _tokenService.GenerateAccessToken(
+        user.Id, user.Email, user.Role.ToString(), user.Name);
+
+Same pattern for `existingByPhone`:
+
+    _tokenService.GenerateAccessToken(
+        existingByPhone.Id, existingByPhone.FirmId, existingByPhone.Email,
+        existingByPhone.Role.ToString(), existingByPhone.Name);
+
+Becomes:
+
+    _tokenService.GenerateAccessToken(
+        existingByPhone.Id, existingByPhone.Email,
+        existingByPhone.Role.ToString(), existingByPhone.Name);
+
+8.3 — Remove .Include(u => u.Firm) from every query
+
+Search AuthController for `.Include(u => u.Firm)` — delete every
+occurrence. The Firm navigation property no longer exists.
+
+8.4 — MapUserToDto helper
+
+Find the `MapUserToDto` static method. Its current signature is:
+
+    private static UserDto MapUserToDto(User user, string? firmName)
+
+Change to:
+
+    private static UserDto MapUserToDto(User user)
+
+Inside the method body, remove any assignment of:
+
+    FirmId = ...
+    FirmName = ...
+
+If there is a `firmName` parameter reference in the method body,
+delete it.
+
+Update every call site within AuthController:
+
+    MapUserToDto(user, user.Firm?.Name)
+    MapUserToDto(user, null)
+
+Become:
+
+    MapUserToDto(user)
+
+8.5 — DELETE the InviteUser method entirely
+
+Find the method:
+
+    [Authorize(Policy = "FirmAdmin")]
+    [HttpPost("invite")]
+    public async Task<ActionResult<ApiResponse<object>>> InviteUser(
+        [FromBody] InviteUserRequest request)
+    { ... }
+
+Delete the entire method from attribute to closing brace.
+
+8.6 — DELETE the AcceptInvite method entirely
+
+Find the method:
+
+    [HttpPost("accept-invite")]
+    public async Task<ActionResult<ApiResponse<AuthResponse>>> AcceptInvite(
+        [FromBody] AcceptInviteRequest request)
+    { ... }
+
+Delete the entire method.
+
+8.7 — Remove Login OTP gate comment block
+
+Find this commented-out block in the Login method:
+
+    // OTP verification temporarily bypassed — SMS provider not yet configured
+    // TODO: Re-enable when MSG91 or Fast2SMS is integrated
+    // if (!user.IsVerified)
+    //     return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
+    //         "Please verify your phone number before logging in.",
+    //         "PHONE_NOT_VERIFIED", 401));
+
+Replace with the ACTIVE version:
+
+    // CAT-2 fix: OTP gate re-enabled for v1. Users must verify
+    // their phone number before they can log in. Registration no
+    // longer pre-sets IsVerified=true (CAT-1 fix in section 8.1).
+    // NOTE: SMS provider integration still pending. In development,
+    // read the OTP from the PhoneOtp column in the users table
+    // directly for testing. Production requires wiring Fast2SMS
+    // or MSG91 to SendPhoneOtpInternalAsync.
+    if (!user.IsVerified)
+    {
+        return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
+            "Please verify your phone number before logging in.",
+            "PHONE_NOT_VERIFIED", 401));
+    }
+
+====================================================================
+TASK 9 — SERVICECOLLECTIONEXTENSIONS CLEANUP
+====================================================================
+
+FILE: backend/src/LexCore.API/Extensions/ServiceCollectionExtensions.cs
+
+9.1 — Remove the FirmAdmin authorization policy
+
+Find the AddAuthorization configuration. It contains:
+
+    options.AddPolicy("FirmAdmin", policy => policy.RequireRole("FirmAdmin", "SuperAdmin"));
+
+Delete this line.
+
+9.2 — Wire FluentValidation auto-validation (CAT-5 fix bonus)
+
+Find this line:
+
+    services.AddValidatorsFromAssemblyContaining<RegisterLawyerRequestValidator>();
+
+Add the auto-validation call immediately below it:
+
+    services.AddValidatorsFromAssemblyContaining<RegisterLawyerRequestValidator>();
+    services.AddFluentValidationAutoValidation();
+
+This activates the 302 lines of validators that were previously
+dead code. If the project does not have `FluentValidation.AspNetCore`
+as a package reference, it must be added. Check the
+`LexCore.Application.csproj` and `LexCore.API.csproj` for the
+package reference. If missing, run:
+
+    dotnet add src/LexCore.API package FluentValidation.AspNetCore
+
+9.3 — ForwardedHeaders KnownProxies (CAT-6 bonus fix)
+
+If the user is running behind Cloudflare Tunnel or Nginx, the
+current ForwardedHeaders config in Program.cs trusts ANY proxy.
+That is an IP spoofing vulnerability. The proper fix requires
+knowing the proxy IP, which varies per deployment.
+
+For development: leave as-is. Add a TODO comment above the
+UseForwardedHeaders call in Program.cs that says:
+
+    // TODO [CAT-6]: Production deployment must set KnownProxies
+    // or KnownNetworks to the Cloudflare Tunnel / Nginx IP range.
+    // Without this, X-Forwarded-For headers can be spoofed,
+    // polluting audit logs and bypassing IP-based rate limits.
+    // Dev environment is trusted so this is acceptable here.
+
+====================================================================
+TASK 10 — INFRASTRUCTURE SERVICES: REMOVE FIRM REFERENCES
+====================================================================
+
+Do a sweep:
+
+    grep -rn "Firm\|FirmId\|\.Firm\|firmId" src/LexCore.Infrastructure/Services/ --include="*.cs"
+
+For each match, apply the appropriate fix:
+
+10.1 — AuditService.cs
+
+Find any:
+
+    FirmId = tenantService.GetCurrentFirmId(),
+    // or
+    FirmId = firmId,
+
+Inside the Log / LogAsync method when creating an AuditLog entity.
+Delete those lines entirely. AuditLog no longer has a FirmId
+property after Phase A.
+
+10.2 — PdfService.cs
+
+Find reads like `invoice.Firm?.Name`, `invoice.Firm?.GstNumber`,
+`firm.Address`, etc.
+
+For now, these are PDF-generation concerns. Since we have no
+Firm, each solo lawyer is their own "firm" for invoice purposes.
+Replace `invoice.Firm?.Name` with the user's own name:
+
+    // Invoice header — solo lawyer's own details act as the firm
+    // header. For v2 when firms come back, re-read firm details
+    // from the linked Firm entity.
+    var headerName = invoice.Case?.CaseLawyers
+        .FirstOrDefault(cl => cl.DeletedAt == null)?.Lawyer?.Name
+        ?? "Lawyer";
+
+Similar logic for GST number, address, logo — use fallback
+empty strings or null for now. The PDF will render without a
+firm logo in v1. That is acceptable.
+
+If this becomes a large refactor, wrap the PDF header-building
+logic in a helper method and leave a TODO to revisit in v2.
+
+10.3 — RazorpayService.cs
+
+This service has two concerns:
+  (a) CreateSubscriptionAsync — for firm monthly billing → delete
+  (b) VerifyWebhookSignature — for invoice payment webhooks → keep
+
+10.3.1 — Delete CreateSubscriptionAsync
+
+Find the method:
+
+    public async Task<(string subscriptionId, string paymentLink)>
+        CreateSubscriptionAsync(Guid firmId, string planId, ...)
+
+Delete the entire method body.
+
+10.3.2 — Delete CancelSubscriptionAsync
+
+Same treatment.
+
+10.3.3 — Update IRazorpayService interface
+
+FILE: backend/src/LexCore.Application/Interfaces/IRazorpayService.cs
+
+Remove the two subscription method signatures from the interface.
+
+Keep only:
+
+    public interface IRazorpayService
+    {
+        bool VerifyWebhookSignature(string payload, string signature, string secret);
+    }
+
+10.3.4 — Fix VerifyWebhookSignature timing attack (CAT-3 bonus)
+
+In RazorpayService.VerifyWebhookSignature, find:
+
+    return computedSignature == signature;
+
+Replace with:
+
+    return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+        System.Text.Encoding.UTF8.GetBytes(computedSignature),
+        System.Text.Encoding.UTF8.GetBytes(signature));
+
+Add `using System.Security.Cryptography;` if not already present.
+
+10.4 — SmartExtractService.cs
+
+Remove any `firmId` parameters from method signatures. Replace
+internal usage with `userId` (the owning lawyer). If the service
+scopes extraction to firm data, scope it to user data instead.
+
+10.5 — DataSeeder.cs
+
+The current seeder likely creates firms + users. For v1, the
+seeder should create:
+  - One SuperAdmin user for local dev (email: admin@lexcore.local,
+    password: Admin@123, role: SuperAdmin, IsVerified: true)
+  - One sample Lawyer user for local dev (email: lawyer@lexcore.local,
+    password: Lawyer@123, role: Lawyer, IsVerified: true)
+  - Nothing else
+
+Replace the entire SeedAsync method with:
+
+    public async Task SeedAsync()
+    {
+        // Idempotency: only seed if no users exist
+        if (await _context.Users.AnyAsync()) return;
+
+        var admin = new User
+        {
+            Name = "Local Admin",
+            Email = "admin@lexcore.local",
+            Phone = "9999999999",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin@123", 12),
+            Role = UserRole.SuperAdmin,
+            IsVerified = true,
+            IsPhoneVerified = true,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var lawyer = new User
+        {
+            Name = "Dev Lawyer",
+            Email = "lawyer@lexcore.local",
+            Phone = "8888888888",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Lawyer@123", 12),
+            Role = UserRole.Lawyer,
+            IsVerified = true,
+            IsPhoneVerified = true,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _context.Users.AddRangeAsync(admin, lawyer);
+        await _context.SaveChangesAsync();
+    }
+
+Add `using BCrypt.Net;` and `using LexCore.Domain.Enums;` at the
+top of the file if missing.
+
+10.6 — HearingReminderJob.cs
+
+Find any `FirmId = ...` assignment when creating Notification
+entities. Delete those lines. Notification no longer has FirmId.
+
+10.7 — NotificationRepository.cs
+
+Check for any query that filters on `FirmId`. If a query does
+`Where(n => n.FirmId == firmId)`, delete the FirmId part:
+
+    Where(n => n.LawyerId == lawyerId)
+
+Is the correct scoping.
+
+10.8 — NotificationService.cs
+
+Same pattern. Remove any FirmId assignment when sending
+notifications or creating Notification rows.
+
+====================================================================
+TASK 11 — IPDFSERVICE / IRAZORPAYSERVICE / OTHER INTERFACES
+====================================================================
+
+Sweep:
+
+    grep -rn "Firm\|FirmId" src/LexCore.Application/Interfaces/ --include="*.cs"
+
+For each match, remove the firm-related parameter or method.
+Common fixes:
+
+  - IPdfService: any method taking `Firm firm` as parameter →
+    change to take no firm parameter, use user data instead.
+  - IRazorpayService: already handled in Task 10.3.3.
+  - Anywhere else: apply the same logic.
+
+====================================================================
+TASK 12 — INTERMEDIATE BUILD CHECK
+====================================================================
+
+At this point, run:
+
+    dotnet build src/LexCore.Application/LexCore.Application.csproj
+    dotnet build src/LexCore.Infrastructure/LexCore.Infrastructure.csproj
+
+Both should build cleanly. If they don't, investigate each error
+and apply a fix consistent with the rules above.
+
+The API project (src/LexCore.API) will STILL NOT BUILD because
+controllers reference GetCurrentFirmId() which no longer exists,
+and FirmsController itself still exists. That's Phase C.
+
+====================================================================
+TASK 13 — PHASE B FINAL CHECKLIST
+====================================================================
+
+[ ] ITenantService.GetCurrentFirmId() removed from interface
+[ ] TenantService implementation matches new interface
+[ ] TenantMiddleware no longer reads firmId claim
+[ ] ITokenService.GenerateAccessToken signature has no firmId
+[ ] TokenService no longer adds firmId claim
+[ ] JWT lifetime reduced from 24h to 1h
+[ ] UserDto no longer has FirmId / FirmName
+[ ] InviteUserRequest DTO deleted
+[ ] AcceptInviteRequest DTO deleted
+[ ] InviteUserRequestValidator deleted
+[ ] AuthController.Register sets IsVerified=false (CAT-1 fix)
+[ ] AuthController.Login re-enables OTP gate (CAT-2 fix)
+[ ] AuthController.InviteUser method deleted
+[ ] AuthController.AcceptInvite method deleted
+[ ] AuthController has no .Include(u => u.Firm) calls
+[ ] AuthController.MapUserToDto single-parameter
+[ ] FirmAdmin policy removed from ServiceCollectionExtensions
+[ ] FluentValidation auto-validation wired (CAT-5 fix)
+[ ] Razorpay CreateSubscriptionAsync deleted
+[ ] Razorpay VerifyWebhookSignature uses FixedTimeEquals (CAT-3 fix)
+[ ] DataSeeder simplified to 2 dev users
+[ ] AuditService no longer sets FirmId on audit rows
+[ ] NotificationRepository no longer scopes by firmId
+[ ] HearingReminderJob no longer sets FirmId on notifications
+[ ] PdfService uses user data instead of firm data
+[ ] dotnet build Application project passes
+[ ] dotnet build Infrastructure project passes
+
+[ ] Commit:
+    git add -A
+    git commit -m "Step 14-pre Phase B: services + auth + CAT-1/2/3/5/6 security fixes"
+
+====================================================================
+WHAT TO REPORT BACK
+====================================================================
+
+When Phase B is done, report:
+  1. Exact list of files modified (should be ~15-20)
+  2. Output of Application and Infrastructure build commands
+  3. Output of: grep -rn "GetCurrentFirmId\|FirmId\|\.Firm" src/LexCore.Application/ src/LexCore.Infrastructure/
+     Expected: zero or near-zero matches
+  4. `git log --oneline -10`
+  5. Any unexpected errors
+
+DO NOT proceed to Phase C. Wait for user confirmation.
+
+The API project will still fail to build because controllers
+still reference the removed GetCurrentFirmId() method and still
+have FirmsController and FirmAdmin-policy endpoints. Phase C
+will clean all of that up.
+
+====================================================================
+END OF PHASE B
+====================================================================

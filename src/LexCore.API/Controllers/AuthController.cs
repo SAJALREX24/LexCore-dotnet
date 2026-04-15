@@ -67,15 +67,15 @@ public class AuthController : ControllerBase
             existingByPhone.CourtType = request.CourtType;
             existingByPhone.State = request.State;
             existingByPhone.City = request.City;
-            existingByPhone.IsVerified = true;
-            existingByPhone.IsPhoneVerified = true;
+            existingByPhone.IsVerified = false;
+            existingByPhone.IsPhoneVerified = false;
 
             await _context.SaveChangesAsync();
 
             await SendPhoneOtpInternalAsync(existingByPhone);
 
             var at = _tokenService.GenerateAccessToken(
-                existingByPhone.Id, existingByPhone.FirmId, existingByPhone.Email,
+                existingByPhone.Id, existingByPhone.Email,
                 existingByPhone.Role.ToString(), existingByPhone.Name);
             var rt = _tokenService.GenerateRefreshToken();
 
@@ -87,8 +87,8 @@ public class AuthController : ControllerBase
             {
                 AccessToken = at,
                 RefreshToken = rt,
-                ExpiresAt = DateTime.UtcNow.AddHours(24),
-                User = MapUserToDto(existingByPhone, null)
+                ExpiresAt = DateTime.UtcNow.AddMinutes(60),
+                User = MapUserToDto(existingByPhone)
             }, "Registration successful. Please verify your phone number."));
         }
 
@@ -99,8 +99,8 @@ public class AuthController : ControllerBase
             Phone = request.Phone,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12),
             Role = UserRole.Lawyer,
-            IsVerified = true,
-            IsPhoneVerified = true,
+            IsVerified = false,
+            IsPhoneVerified = false,
             BarEnrollmentNumber = request.BarEnrollmentNumber,
             CourtType = request.CourtType,
             State = request.State,
@@ -115,7 +115,7 @@ public class AuthController : ControllerBase
         await SendPhoneOtpInternalAsync(user);
 
         var accessToken = _tokenService.GenerateAccessToken(
-            user.Id, user.FirmId, user.Email, user.Role.ToString(), user.Name);
+            user.Id, user.Email, user.Role.ToString(), user.Name);
         var refreshToken = _tokenService.GenerateRefreshToken();
 
         user.RefreshToken = refreshToken;
@@ -126,8 +126,8 @@ public class AuthController : ControllerBase
         {
             AccessToken = accessToken,
             RefreshToken = refreshToken,
-            ExpiresAt = DateTime.UtcNow.AddHours(24),
-            User = MapUserToDto(user, null)
+            ExpiresAt = DateTime.UtcNow.AddMinutes(60),
+            User = MapUserToDto(user)
         }, "Registration successful. Please verify your phone number."));
     }
 
@@ -209,7 +209,6 @@ public class AuthController : ControllerBase
         [FromBody] LoginRequest request)
     {
         var user = await _context.Users
-            .Include(u => u.Firm)
             .FirstOrDefaultAsync(u => u.Email == request.Email);
 
         // Generic delay to prevent timing attacks
@@ -255,15 +254,22 @@ public class AuthController : ControllerBase
         user.FailedLoginAttempts = 0;
         user.LockoutEnd = null;
 
-        // OTP verification temporarily bypassed — SMS provider not yet configured
-        // TODO: Re-enable when MSG91 or Fast2SMS is integrated
-        // if (!user.IsVerified)
-        //     return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
-        //         "Please verify your phone number before logging in.",
-        //         "PHONE_NOT_VERIFIED", 401));
+        // CAT-2 fix: OTP gate re-enabled for v1. Users must verify
+        // their phone number before they can log in. Registration no
+        // longer pre-sets IsVerified=true (CAT-1 fix in Register).
+        // NOTE: SMS provider integration still pending. In development,
+        // read the OTP from the PhoneOtp column in the users table
+        // directly for testing. Production requires wiring Fast2SMS
+        // or MSG91 to SendPhoneOtpInternalAsync.
+        if (!user.IsVerified)
+        {
+            return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
+                "Please verify your phone number before logging in.",
+                "PHONE_NOT_VERIFIED", 401));
+        }
 
         var accessToken = _tokenService.GenerateAccessToken(
-            user.Id, user.FirmId, user.Email, user.Role.ToString(), user.Name);
+            user.Id, user.Email, user.Role.ToString(), user.Name);
         var refreshToken = _tokenService.GenerateRefreshToken();
 
         user.RefreshToken = refreshToken;
@@ -275,8 +281,8 @@ public class AuthController : ControllerBase
         {
             AccessToken = accessToken,
             RefreshToken = refreshToken,
-            ExpiresAt = DateTime.UtcNow.AddHours(24),
-            User = MapUserToDto(user, user.Firm?.Name)
+            ExpiresAt = DateTime.UtcNow.AddMinutes(60),
+            User = MapUserToDto(user)
         }, "Login successful"));
     }
 
@@ -286,7 +292,6 @@ public class AuthController : ControllerBase
         [FromBody] RefreshTokenRequest request)
     {
         var user = await _context.Users
-            .Include(u => u.Firm)
             .FirstOrDefaultAsync(u => u.RefreshToken == request.RefreshToken);
 
         if (user == null || user.RefreshTokenExpiry < DateTime.UtcNow)
@@ -294,7 +299,7 @@ public class AuthController : ControllerBase
                 "Invalid or expired refresh token", "INVALID_REFRESH_TOKEN", 401));
 
         var accessToken = _tokenService.GenerateAccessToken(
-            user.Id, user.FirmId, user.Email, user.Role.ToString(), user.Name);
+            user.Id, user.Email, user.Role.ToString(), user.Name);
         var newRefreshToken = _tokenService.GenerateRefreshToken();
 
         user.RefreshToken = newRefreshToken;
@@ -305,8 +310,8 @@ public class AuthController : ControllerBase
         {
             AccessToken = accessToken,
             RefreshToken = newRefreshToken,
-            ExpiresAt = DateTime.UtcNow.AddHours(24),
-            User = MapUserToDto(user, user.Firm?.Name)
+            ExpiresAt = DateTime.UtcNow.AddMinutes(60),
+            User = MapUserToDto(user)
         }, "Token refreshed successfully"));
     }
 
@@ -381,89 +386,6 @@ public class AuthController : ControllerBase
         return Ok(ApiResponse<object>.SuccessResponse(null!, "Password reset successfully"));
     }
 
-    // ── INVITE USER ──────────────────────────────────────────────────────────
-    [Authorize(Policy = "FirmAdmin")]
-    [HttpPost("invite")]
-    public async Task<ActionResult<ApiResponse<object>>> InviteUser([FromBody] InviteUserRequest request)
-    {
-        var firmId = _tenantService.GetCurrentFirmId();
-        var currentUserId = _tenantService.GetCurrentUserId();
-
-        if (await _context.Users.AnyAsync(u => u.Email == request.Email))
-            return BadRequest(ApiResponse<object>.ErrorResponse("Email already registered", "EMAIL_EXISTS", 400));
-
-        var firm = await _context.Firms.FindAsync(firmId);
-        var inviter = await _context.Users.FindAsync(currentUserId);
-
-        var inviteToken = Guid.NewGuid().ToString();
-        var user = new User
-        {
-            FirmId = firmId,
-            Name = request.Name,
-            Email = request.Email,
-            PasswordHash = "",
-            Role = request.Role,
-            IsVerified = false,
-            InviteToken = inviteToken,
-            InviteTokenExpiry = DateTime.UtcNow.AddDays(7)
-        };
-
-        await _context.Users.AddAsync(user);
-        await _context.SaveChangesAsync();
-
-        try
-        {
-            await _emailService.SendInviteEmailAsync(
-                request.Email,
-                firm!.Name,
-                inviter!.Name,
-                inviteToken,
-                request.Role.ToString());
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to send invite email to {Email}", request.Email);
-        }
-
-        await _auditService.LogAsync("USER_INVITED", "User", user.Id, ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
-
-        return Ok(ApiResponse<object>.SuccessResponse(null!, "Invitation sent successfully"));
-    }
-
-    // ── ACCEPT INVITE ────────────────────────────────────────────────────────
-    [HttpPost("accept-invite")]
-    public async Task<ActionResult<ApiResponse<AuthResponse>>> AcceptInvite([FromBody] AcceptInviteRequest request)
-    {
-        var user = await _context.Users
-            .Include(u => u.Firm)
-            .FirstOrDefaultAsync(u =>
-                u.InviteToken == request.Token &&
-                u.InviteTokenExpiry > DateTime.UtcNow);
-
-        if (user == null)
-            return BadRequest(ApiResponse<AuthResponse>.ErrorResponse("Invalid or expired invitation token", "INVALID_TOKEN", 400));
-
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12);
-        user.IsVerified = true;
-        user.InviteToken = null;
-        user.InviteTokenExpiry = null;
-
-        var accessToken = _tokenService.GenerateAccessToken(user.Id, user.FirmId, user.Email, user.Role.ToString(), user.Name);
-        var refreshToken = _tokenService.GenerateRefreshToken();
-
-        user.RefreshToken = refreshToken;
-        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(7);
-        await _context.SaveChangesAsync();
-
-        return Ok(ApiResponse<AuthResponse>.SuccessResponse(new AuthResponse
-        {
-            AccessToken = accessToken,
-            RefreshToken = refreshToken,
-            ExpiresAt = DateTime.UtcNow.AddHours(24),
-            User = MapUserToDto(user, user.Firm?.Name)
-        }, "Account activated successfully"));
-    }
-
     // ── HELPERS ──────────────────────────────────────────────────────────────
     private async Task SendPhoneOtpInternalAsync(User user)
     {
@@ -479,7 +401,7 @@ public class AuthController : ControllerBase
         // TODO: Integrate with SMS provider (Twilio / MSG91 / Fast2SMS)
     }
 
-    private static UserDto MapUserToDto(User user, string? firmName)
+    private static UserDto MapUserToDto(User user)
     {
         return new UserDto
         {
@@ -487,8 +409,6 @@ public class AuthController : ControllerBase
             Name = user.Name,
             Email = user.Email,
             Role = user.Role.ToString(),
-            FirmId = user.FirmId,
-            FirmName = firmName,
             IsVerified = user.IsVerified,
             IsPhoneVerified = user.IsPhoneVerified,
             Phone = user.Phone,

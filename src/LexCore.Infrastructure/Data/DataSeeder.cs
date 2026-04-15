@@ -1,8 +1,6 @@
-using BCrypt.Net;
 using LexCore.Domain.Entities;
 using LexCore.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace LexCore.Infrastructure.Data;
@@ -24,26 +22,36 @@ public class DataSeeder
         {
             await _context.Database.MigrateAsync();
 
-            if (await _context.Users.AnyAsync())
-            {
-                _logger.LogInformation("Database already seeded.");
-                return;
-            }
+            // Idempotency: only seed if no users exist
+            if (await _context.Users.AnyAsync()) return;
 
-            _logger.LogInformation("Seeding database...");
+            _logger.LogInformation("Seeding database with dev users...");
 
-            // v1 solo-only: seed only SuperAdmin. Firm and subscription seeding removed.
-            var superAdmin = new User
+            var admin = new User
             {
-                Id = Guid.NewGuid(),
-                Name = "Super Admin",
-                Email = "superadmin@lexcore.in",
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword("SuperAdmin@1234", 12),
+                Name = "Local Admin",
+                Email = "admin@lexcore.local",
+                Phone = "9999999999",
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin@123", 12),
                 Role = UserRole.SuperAdmin,
-                IsVerified = true
+                IsVerified = true,
+                IsPhoneVerified = true,
+                CreatedAt = DateTime.UtcNow
             };
 
-            await _context.Users.AddAsync(superAdmin);
+            var lawyer = new User
+            {
+                Name = "Dev Lawyer",
+                Email = "lawyer@lexcore.local",
+                Phone = "8888888888",
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Lawyer@123", 12),
+                Role = UserRole.Lawyer,
+                IsVerified = true,
+                IsPhoneVerified = true,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            await _context.Users.AddRangeAsync(admin, lawyer);
             await _context.SaveChangesAsync();
             _logger.LogInformation("Database seeding completed successfully.");
         }

@@ -1,6 +1,5 @@
 using FluentValidation;
 using LexCore.Application.DTOs.Auth;
-using LexCore.Domain.Enums;
 
 namespace LexCore.Application.Validators;
 
@@ -39,24 +38,6 @@ public class LoginRequestValidator : AbstractValidator<LoginRequest>
 
         RuleFor(x => x.Password)
             .NotEmpty().WithMessage("Password is required");
-    }
-}
-
-public class InviteUserRequestValidator : AbstractValidator<InviteUserRequest>
-{
-    public InviteUserRequestValidator()
-    {
-        RuleFor(x => x.Email)
-            .NotEmpty().WithMessage("Email is required")
-            .EmailAddress().WithMessage("Invalid email format");
-
-        RuleFor(x => x.Name)
-            .NotEmpty().WithMessage("Name is required")
-            .MaximumLength(200).WithMessage("Name cannot exceed 200 characters");
-
-        RuleFor(x => x.Role)
-            .Must(r => r == UserRole.Lawyer || r == UserRole.Client)
-            .WithMessage("Role must be either Lawyer or Client");
     }
 }
 

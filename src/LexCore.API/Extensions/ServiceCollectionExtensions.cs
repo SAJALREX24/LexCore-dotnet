@@ -100,8 +100,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IResearchCacheService, ResearchCacheService>();
         services.AddSingleton<LegalQueryValidator>();
 
-        // FluentValidation
+        // FluentValidation — CAT-5 fix: auto-validation wired to activate validators
         services.AddValidatorsFromAssemblyContaining<RegisterLawyerRequestValidator>();
+        services.AddFluentValidationAutoValidation();
 
         return services;
     }
@@ -130,9 +131,8 @@ public static class ServiceCollectionExtensions
 
         services.AddAuthorization(options =>
         {
-            options.AddPolicy("FirmAdmin", policy => policy.RequireRole("FirmAdmin", "SuperAdmin"));
-            options.AddPolicy("Lawyer", policy => policy.RequireRole("FirmAdmin", "Lawyer", "SuperAdmin"));
-            options.AddPolicy("Client", policy => policy.RequireRole("FirmAdmin", "Lawyer", "Client", "SuperAdmin"));
+            options.AddPolicy("Lawyer", policy => policy.RequireRole("Lawyer", "SuperAdmin"));
+            options.AddPolicy("Client", policy => policy.RequireRole("Lawyer", "Client", "SuperAdmin"));
             options.AddPolicy("SuperAdmin", policy => policy.RequireRole("SuperAdmin"));
         });
 
