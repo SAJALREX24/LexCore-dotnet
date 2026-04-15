@@ -4,5 +4,5 @@ namespace LexCore.Application.Interfaces;
 
 public interface IPdfService
 {
-    byte[] GenerateInvoicePdf(Invoice invoice, Firm firm, User client);
+    byte[] GenerateInvoicePdf(Invoice invoice, Firm firm, User client, User? lawyer = null);
 }

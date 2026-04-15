@@ -1,0 +1,996 @@
+====================================================================
+LEXCORE AI — STEP 6: BACKEND DELETE FIX + SCREEN 2 (CLIENT DETAILS)
+====================================================================
+
+YOU ARE AN EXPERT FLUTTER + .NET DEVELOPER WITH 20+ YEARS EXPERIENCE.
+READ EVERY INSTRUCTION CAREFULLY BEFORE WRITING A SINGLE LINE.
+
+====================================================================
+CRITICAL RULES
+====================================================================
+1. Backend fix first — then Flutter
+2. Only change exactly what is described — nothing else
+3. Do NOT touch any other screen file
+4. After backend fix: dotnet build — must show 0 errors
+5. After Flutter changes: flutter analyze — must show No issues found!
+6. Use AppTheme colors only — never hardcode hex values
+7. If unsure — STOP. Do not guess.
+
+====================================================================
+PART A — BACKEND FIXES (CasesController + HearingsController)
+====================================================================
+
+PROJECT PATH: C:\Users\Dell\Desktop\LexCore-dotnet\
+
+────────────────────────────────────────────────────────────────────
+BACKEND FIX 1 — DeleteCase: FirmAdmin-only blocks solo lawyers
+────────────────────────────────────────────────────────────────────
+SEVERITY: HIGH — solo lawyers cannot delete their own cases
+
+FILE: src\LexCore.API\Controllers\CasesController.cs
+
+FIND the DeleteCase method:
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "FirmAdmin")]
+    public async Task<ActionResult<ApiResponse<object>>> DeleteCase(Guid id)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var caseEntity = await _context.Cases.FirstOrDefaultAsync(c => c.Id == id && c.FirmId == firmId);
+
+        if (caseEntity == null)
+        {
+            return NotFound(ApiResponse<object>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
+        }
+
+        caseEntity.DeletedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        await _auditService.LogAsync("CASE_DELETED", "Case", id, ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(ApiResponse<object>.SuccessResponse(null!, "Case deleted successfully"));
+    }
+
+REPLACE WITH:
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<object>>> DeleteCase(Guid id)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+        var role = _tenantService.GetCurrentUserRole();
+
+        // Security: solo lawyers can only delete their own cases
+        var caseEntity = await _context.Cases
+            .Include(c => c.CaseLawyers)
+            .FirstOrDefaultAsync(c =>
+                c.Id == id &&
+                (firmId.HasValue
+                    ? c.FirmId == firmId.Value
+                    : c.FirmId == null &&
+                      c.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (caseEntity == null)
+        {
+            return NotFound(ApiResponse<object>.ErrorResponse(
+                "Case not found", "CASE_NOT_FOUND", 404));
+        }
+
+        // Firm lawyers: only FirmAdmin can delete cases
+        if (firmId.HasValue && role != UserRole.FirmAdmin.ToString() && role != UserRole.SuperAdmin.ToString())
+        {
+            return Forbid();
+        }
+
+        caseEntity.DeletedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        await _auditService.LogAsync("CASE_DELETED", "Case", id,
+            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(ApiResponse<object>.SuccessResponse(null!, "Case deleted successfully"));
+    }
+
+dotnet build — fix errors before continuing.
+
+────────────────────────────────────────────────────────────────────
+BACKEND FIX 2 — DeleteHearing: FirmAdmin-only blocks solo lawyers
+────────────────────────────────────────────────────────────────────
+SEVERITY: HIGH — solo lawyers cannot delete their own hearings
+
+FILE: src\LexCore.API\Controllers\HearingsController.cs
+
+FIND the DeleteHearing method:
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "FirmAdmin")]
+    public async Task<ActionResult<ApiResponse<object>>> DeleteHearing(Guid id)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var hearing = await _context.Hearings.FirstOrDefaultAsync(h => h.Id == id && h.FirmId == firmId);
+
+        if (hearing == null)
+        {
+            return NotFound(ApiResponse<object>.ErrorResponse("Hearing not found", "NOT_FOUND", 404));
+        }
+
+        hearing.DeletedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        await _auditService.LogAsync("HEARING_DELETED", "Hearing", id, ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(ApiResponse<object>.SuccessResponse(null!, "Hearing deleted successfully"));
+    }
+
+REPLACE WITH:
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<object>>> DeleteHearing(Guid id)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+        var role = _tenantService.GetCurrentUserRole();
+
+        // Security: solo lawyers can only delete hearings from their own cases
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(h =>
+                h.Id == id &&
+                (firmId.HasValue
+                    ? h.FirmId == firmId.Value
+                    : h.FirmId == null &&
+                      h.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (hearing == null)
+        {
+            return NotFound(ApiResponse<object>.ErrorResponse(
+                "Hearing not found", "NOT_FOUND", 404));
+        }
+
+        // Firm lawyers: only FirmAdmin can delete hearings
+        if (firmId.HasValue && role != UserRole.FirmAdmin.ToString() && role != UserRole.SuperAdmin.ToString())
+        {
+            return Forbid();
+        }
+
+        hearing.DeletedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        await _auditService.LogAsync("HEARING_DELETED", "Hearing", id,
+            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(ApiResponse<object>.SuccessResponse(null!, "Hearing deleted successfully"));
+    }
+
+dotnet build — must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+====================================================================
+PART B — FLUTTER FIXES (3 leftover issues from Step 5)
+====================================================================
+
+PROJECT PATH: C:\Users\Dell\Desktop\lexcore_app\
+
+FILE FOR ALL FLUTTER CHANGES: lib/screens/cases/add_case_screen.dart
+
+────────────────────────────────────────────────────────────────────
+FLUTTER FIX 1 — Add flutter/services import
+────────────────────────────────────────────────────────────────────
+
+FIND at top of add_case_screen.dart:
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+ADD after flutter/material.dart:
+import 'package:flutter/services.dart';
+
+────────────────────────────────────────────────────────────────────
+FLUTTER FIX 2 — Validation gap for Tribunal/Consumer/Special courts
+────────────────────────────────────────────────────────────────────
+
+FILE: lib/screens/cases/add_case_screen.dart
+
+FIND _validateCurrentPage() method.
+FIND this block inside it:
+      if (_p.courtType == 'DistrictCourt' && _p.district == null) {
+        _showError('Please select a district');
+        return false;
+      }
+    }
+    return true;
+  }
+
+REPLACE WITH:
+      if (_p.courtType == 'DistrictCourt' && _p.district == null) {
+        _showError('Please select a district');
+        return false;
+      }
+      // Validate court name for courts that need explicit selection
+      if ((_p.courtType == 'Tribunal' ||
+              _p.courtType == 'ConsumerCourt' ||
+              _p.courtType == 'SpecialCourt') &&
+          _p.courtHierarchyName == null) {
+        _showError('Please select a ${_courtTypeLabels[_p.courtType] ?? _p.courtType}');
+        return false;
+      }
+    }
+    return true;
+  }
+
+NOTE: _courtTypeLabels is defined in _Screen1State, not in
+_AddCaseScreenState. Since _validateCurrentPage is in
+_AddCaseScreenState, define a simple local map there too:
+
+ADD this constant inside _AddCaseScreenState class
+(just before _validateCurrentPage method):
+
+  static const _courtTypeLabels = {
+    'SupremeCourt': 'Supreme Court',
+    'HighCourt': 'High Court',
+    'DistrictCourt': 'District Court',
+    'Tribunal': 'Tribunal',
+    'ConsumerCourt': 'Consumer Commission',
+    'RevenueCourt': 'Revenue Court',
+    'FamilyCourt': 'Family Court',
+    'SpecialCourt': 'Special Court',
+  };
+
+────────────────────────────────────────────────────────────────────
+FLUTTER FIX 3 — Sync titleCtrl from provider on initState
+────────────────────────────────────────────────────────────────────
+
+FILE: lib/screens/cases/add_case_screen.dart
+
+FIND in _AddCaseScreenState:
+  @override
+  void dispose() {
+    _pageController.dispose();
+    _titleCtrl.dispose();
+    _caseNumberCtrl.dispose();
+    super.dispose();
+  }
+
+ADD initState BEFORE dispose():
+  @override
+  void initState() {
+    super.initState();
+    // Sync controllers with any existing provider state
+    // (handles case where screen is rebuilt with existing data)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final p = context.read<AddCaseProvider>();
+      if (p.title.isNotEmpty && _titleCtrl.text.isEmpty) {
+        _titleCtrl.text = p.title;
+      }
+      if (p.caseNumber != null && _caseNumberCtrl.text.isEmpty) {
+        _caseNumberCtrl.text = p.caseNumber!;
+      }
+    });
+  }
+
+flutter analyze — fix errors before continuing to Screen 2.
+
+====================================================================
+PART C — FLUTTER SCREEN 2: CLIENT DETAILS
+====================================================================
+
+FILE: lib/screens/cases/add_case_screen.dart
+
+FIND the _Screen2 placeholder class:
+class _Screen2 extends StatelessWidget {
+  const _Screen2();
+  @override
+  Widget build(BuildContext context) => _PlaceholderScreen(
+    icon: Icons.person_outline,
+    title: 'Client Details',
+    subtitle: 'Enter client name, phone, address and ID documents',
+    step: 2,
+  );
+}
+
+REPLACE with this complete implementation:
+
+class _Screen2 extends StatefulWidget {
+  const _Screen2();
+  @override
+  State<_Screen2> createState() => _Screen2State();
+}
+
+class _Screen2State extends State<_Screen2> {
+  // Text controllers
+  final _nameCtrl = TextEditingController();
+  final _positionCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _whatsAppCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _fatherNameCtrl = TextEditingController();
+  final _ageCtrl = TextEditingController();
+  final _addressCtrl = TextEditingController();
+  // Company/Firm fields
+  final _companyNameCtrl = TextEditingController();
+  final _cinCtrl = TextEditingController();
+  final _gstCtrl = TextEditingController();
+  final _authRepCtrl = TextEditingController();
+  final _authRepDesignationCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Sync controllers from provider state on rebuild
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final p = context.read<AddCaseProvider>();
+      _nameCtrl.text = p.clientName ?? '';
+      _positionCtrl.text = p.clientPosition ?? '';
+      _phoneCtrl.text = p.clientPhone ?? '';
+      _whatsAppCtrl.text = p.clientWhatsApp ?? '';
+      _emailCtrl.text = p.clientEmail ?? '';
+      _fatherNameCtrl.text = p.clientFatherName ?? '';
+      _ageCtrl.text = p.clientAge?.toString() ?? '';
+      _addressCtrl.text = p.clientAddress ?? '';
+      _companyNameCtrl.text = p.companyName ?? '';
+      _cinCtrl.text = p.companyCIN ?? '';
+      _gstCtrl.text = p.companyGST ?? '';
+      _authRepCtrl.text = p.authorisedRepresentative ?? '';
+      _authRepDesignationCtrl.text = p.authorisedRepresentativeDesignation ?? '';
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _positionCtrl.dispose();
+    _phoneCtrl.dispose();
+    _whatsAppCtrl.dispose();
+    _emailCtrl.dispose();
+    _fatherNameCtrl.dispose();
+    _ageCtrl.dispose();
+    _addressCtrl.dispose();
+    _companyNameCtrl.dispose();
+    _cinCtrl.dispose();
+    _gstCtrl.dispose();
+    _authRepCtrl.dispose();
+    _authRepDesignationCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── HELPER WIDGETS ─────────────────────────────────────────────
+
+  Widget _sectionCard({required String title, required Widget child}) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: AppTheme.borderColor),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withAlpha(8),
+              blurRadius: 6,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: const BoxDecoration(
+              color: AppTheme.primaryColor,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+            ),
+            child: Text(title,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12)),
+          ),
+          Padding(padding: const EdgeInsets.all(14), child: child),
+        ],
+      ),
+    );
+  }
+
+  Widget _label(String text, {bool required = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: RichText(
+        text: TextSpan(
+          text: text,
+          style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w600),
+          children: required
+              ? const [
+                  TextSpan(
+                      text: ' *',
+                      style: TextStyle(color: AppTheme.errorColor))
+                ]
+              : [],
+        ),
+      ),
+    );
+  }
+
+  Widget _field({
+    required TextEditingController controller,
+    required String label,
+    String? hint,
+    bool required = false,
+    TextInputType keyboardType = TextInputType.text,
+    List<TextInputFormatter>? inputFormatters,
+    int maxLines = 1,
+    void Function(String)? onChanged,
+    String? Function(String?)? validator,
+    Widget? prefixIcon,
+    Widget? suffix,
+    String? helperText,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _label(label, required: required),
+        TextFormField(
+          controller: controller,
+          keyboardType: keyboardType,
+          inputFormatters: inputFormatters,
+          maxLines: maxLines,
+          onChanged: onChanged,
+          validator: validator,
+          textInputAction: maxLines == 1
+              ? TextInputAction.next
+              : TextInputAction.newline,
+          decoration: InputDecoration(
+            hintText: hint,
+            prefixIcon: prefixIcon,
+            suffix: suffix,
+            helperText: helperText,
+            helperStyle: const TextStyle(
+                fontSize: 10, color: AppTheme.textSecondary),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  // ── BUILD ───────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AddCaseProvider>(
+      builder: (_, p, __) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+
+              // ── CLIENT TYPE SELECTOR ─────────────────────────
+              _sectionCard(
+                title: '👤 Client Type',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _label('Who is your client?', required: true),
+                    Row(
+                      children: ['Individual', 'Company', 'Firm']
+                          .map((type) {
+                        final isSelected = p.clientType == type;
+                        IconData icon;
+                        switch (type) {
+                          case 'Company':
+                            icon = Icons.business_outlined;
+                            break;
+                          case 'Firm':
+                            icon = Icons.account_balance_outlined;
+                            break;
+                          default:
+                            icon = Icons.person_outline;
+                        }
+                        return Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              p.clientType = type;
+                              p.notify();
+                            },
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              margin: const EdgeInsets.only(right: 8),
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: 10),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? AppTheme.primaryColor
+                                    : AppTheme.surfaceColor,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: isSelected
+                                      ? AppTheme.primaryColor
+                                      : AppTheme.borderColor,
+                                  width: isSelected ? 2 : 1,
+                                ),
+                              ),
+                              child: Column(
+                                children: [
+                                  Icon(icon,
+                                      size: 20,
+                                      color: isSelected
+                                          ? AppTheme.accentColor
+                                          : AppTheme.textSecondary),
+                                  const SizedBox(height: 4),
+                                  Text(type,
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: isSelected
+                                              ? FontWeight.bold
+                                              : FontWeight.normal,
+                                          color: isSelected
+                                              ? Colors.white
+                                              : AppTheme.primaryColor)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── BASIC DETAILS ────────────────────────────────
+              _sectionCard(
+                title: '📋 Basic Details',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+
+                    // Client name
+                    _field(
+                      controller: _nameCtrl,
+                      label: p.clientType == 'Individual'
+                          ? 'Full Name'
+                          : 'Contact Person Name',
+                      hint: p.clientType == 'Individual'
+                          ? 'e.g. Ramesh Kumar Sharma'
+                          : 'e.g. Priya Singh (Director)',
+                      required: true,
+                      prefixIcon: const Icon(Icons.person_outline),
+                      onChanged: (v) {
+                        p.clientName = v.trim().isEmpty ? null : v.trim();
+                        p.notify();
+                      },
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty
+                              ? 'Client name is required'
+                              : null,
+                    ),
+
+                    // Client position (role in case)
+                    _field(
+                      controller: _positionCtrl,
+                      label: 'Position in Case',
+                      hint: 'e.g. Petitioner, Accused, Plaintiff, Respondent',
+                      prefixIcon: const Icon(Icons.gavel_outlined),
+                      onChanged: (v) {
+                        p.clientPosition =
+                            v.trim().isEmpty ? null : v.trim();
+                        p.notify();
+                      },
+                    ),
+
+                    // Individual-only fields
+                    if (p.clientType == 'Individual') ...[
+                      _field(
+                        controller: _fatherNameCtrl,
+                        label: 'Father / Husband Name',
+                        hint: 'e.g. Suresh Kumar Sharma',
+                        prefixIcon: const Icon(Icons.family_restroom_outlined),
+                        onChanged: (v) {
+                          p.clientFatherName =
+                              v.trim().isEmpty ? null : v.trim();
+                          p.notify();
+                        },
+                      ),
+                      _field(
+                        controller: _ageCtrl,
+                        label: 'Age',
+                        hint: 'e.g. 35',
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
+                        prefixIcon: const Icon(Icons.cake_outlined),
+                        onChanged: (v) {
+                          p.clientAge = int.tryParse(v);
+                          p.notify();
+                        },
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return null;
+                          final age = int.tryParse(v);
+                          if (age == null || age < 1 || age > 120) {
+                            return 'Enter a valid age (1-120)';
+                          }
+                          return null;
+                        },
+                      ),
+                    ],
+
+                    // ID Document Type
+                    _label('ID Document Type'),
+                    DropdownButtonFormField<String>(
+                      value: p.clientIDDocumentType,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        hintText: 'Select document type',
+                        prefixIcon: Icon(Icons.badge_outlined),
+                        contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 14),
+                      ),
+                      items: const [
+                        'Aadhaar Card',
+                        'PAN Card',
+                        'Voter ID',
+                        'Passport',
+                        'Driving Licence',
+                        'Ration Card',
+                        'Other',
+                      ]
+                          .map((d) => DropdownMenuItem(
+                              value: d,
+                              child: Text(d)))
+                          .toList(),
+                      onChanged: (v) {
+                        p.clientIDDocumentType = v;
+                        p.notify();
+                      },
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Address
+                    _field(
+                      controller: _addressCtrl,
+                      label: 'Address',
+                      hint: 'Full residential / registered address',
+                      maxLines: 3,
+                      prefixIcon: const Icon(Icons.home_outlined),
+                      onChanged: (v) {
+                        p.clientAddress =
+                            v.trim().isEmpty ? null : v.trim();
+                        p.notify();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── COMPANY / FIRM FIELDS ────────────────────────
+              if (p.clientType != 'Individual')
+                _sectionCard(
+                  title: p.clientType == 'Company'
+                      ? '🏢 Company Details'
+                      : '⚖️ Firm Details',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _field(
+                        controller: _companyNameCtrl,
+                        label: p.clientType == 'Company'
+                            ? 'Company Name'
+                            : 'Firm Name',
+                        hint: p.clientType == 'Company'
+                            ? 'e.g. ABC Pvt. Ltd.'
+                            : 'e.g. M/s Sharma & Associates',
+                        required: true,
+                        prefixIcon: const Icon(Icons.business_outlined),
+                        onChanged: (v) {
+                          p.companyName =
+                              v.trim().isEmpty ? null : v.trim();
+                          p.notify();
+                        },
+                      ),
+                      if (p.clientType == 'Company') ...[
+                        _field(
+                          controller: _cinCtrl,
+                          label: 'CIN (Company Identification Number)',
+                          hint: 'e.g. U72900MH2020PTC345678',
+                          prefixIcon: const Icon(Icons.numbers_outlined),
+                          onChanged: (v) {
+                            p.companyCIN =
+                                v.trim().isEmpty ? null : v.trim();
+                            p.notify();
+                          },
+                        ),
+                        _field(
+                          controller: _gstCtrl,
+                          label: 'GST Number',
+                          hint: 'e.g. 27AAPFU0939F1ZV',
+                          prefixIcon: const Icon(Icons.receipt_outlined),
+                          onChanged: (v) {
+                            p.companyGST =
+                                v.trim().isEmpty ? null : v.trim();
+                            p.notify();
+                          },
+                        ),
+                      ],
+                      _field(
+                        controller: _authRepCtrl,
+                        label: 'Authorised Representative',
+                        hint: 'Name of the authorised person',
+                        prefixIcon: const Icon(Icons.person_pin_outlined),
+                        onChanged: (v) {
+                          p.authorisedRepresentative =
+                              v.trim().isEmpty ? null : v.trim();
+                          p.notify();
+                        },
+                      ),
+                      _field(
+                        controller: _authRepDesignationCtrl,
+                        label: 'Designation',
+                        hint: 'e.g. Director, Partner, Manager',
+                        prefixIcon: const Icon(Icons.work_outline),
+                        onChanged: (v) {
+                          p.authorisedRepresentativeDesignation =
+                              v.trim().isEmpty ? null : v.trim();
+                          p.notify();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+
+              // ── CONTACT ──────────────────────────────────────
+              _sectionCard(
+                title: '📱 Contact Details',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+
+                    // Phone
+                    _field(
+                      controller: _phoneCtrl,
+                      label: 'Mobile Number',
+                      hint: '9876543210',
+                      keyboardType: TextInputType.phone,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(10),
+                      ],
+                      prefixIcon: const Icon(Icons.phone_outlined),
+                      suffix: const Text('+91',
+                          style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 13)),
+                      helperText: '10-digit Indian mobile number',
+                      onChanged: (v) {
+                        p.clientPhone =
+                            v.trim().isEmpty ? null : v.trim();
+                        // Auto-fill WhatsApp if same as phone
+                        if (p.whatsAppSameAsPhone) {
+                          p.clientWhatsApp = p.clientPhone;
+                          _whatsAppCtrl.text = v;
+                        }
+                        p.notify();
+                      },
+                      validator: (v) {
+                        if (v == null || v.isEmpty) return null;
+                        if (!RegExp(r'^[6-9]\d{9}$').hasMatch(v)) {
+                          return 'Enter a valid 10-digit Indian mobile number';
+                        }
+                        return null;
+                      },
+                    ),
+
+                    // WhatsApp toggle
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.backgroundColor,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.borderColor),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.chat_outlined,
+                                  size: 18,
+                                  color: AppTheme.successColor),
+                              const SizedBox(width: 10),
+                              const Expanded(
+                                child: Text('Send hearing reminders on WhatsApp',
+                                    style: TextStyle(fontSize: 13)),
+                              ),
+                              Switch(
+                                value: p.whatsAppEnabled,
+                                activeColor: AppTheme.primaryColor,
+                                onChanged: (v) {
+                                  p.whatsAppEnabled = v;
+                                  if (!v) {
+                                    p.clientWhatsApp = null;
+                                    _whatsAppCtrl.clear();
+                                  }
+                                  p.notify();
+                                },
+                              ),
+                            ],
+                          ),
+                          if (p.whatsAppEnabled) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Checkbox(
+                                  value: p.whatsAppSameAsPhone,
+                                  activeColor: AppTheme.primaryColor,
+                                  onChanged: (v) {
+                                    p.whatsAppSameAsPhone = v ?? true;
+                                    if (p.whatsAppSameAsPhone) {
+                                      p.clientWhatsApp = p.clientPhone;
+                                      _whatsAppCtrl.text =
+                                          p.clientPhone ?? '';
+                                    }
+                                    p.notify();
+                                  },
+                                ),
+                                const Text(
+                                    'Same as mobile number',
+                                    style: TextStyle(fontSize: 13)),
+                              ],
+                            ),
+                            if (!p.whatsAppSameAsPhone) ...[
+                              const SizedBox(height: 8),
+                              _field(
+                                controller: _whatsAppCtrl,
+                                label: 'WhatsApp Number',
+                                hint: '9876543210',
+                                keyboardType: TextInputType.phone,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                  LengthLimitingTextInputFormatter(10),
+                                ],
+                                prefixIcon: const Icon(
+                                    Icons.chat_outlined,
+                                    color: AppTheme.successColor),
+                                suffix: const Text('+91',
+                                    style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 13)),
+                                onChanged: (v) {
+                                  p.clientWhatsApp =
+                                      v.trim().isEmpty ? null : v.trim();
+                                  p.notify();
+                                },
+                                validator: (v) {
+                                  if (!p.whatsAppEnabled ||
+                                      p.whatsAppSameAsPhone) return null;
+                                  if (v == null || v.isEmpty) return null;
+                                  if (!RegExp(r'^[6-9]\d{9}$').hasMatch(v)) {
+                                    return 'Enter a valid 10-digit number';
+                                  }
+                                  return null;
+                                },
+                              ),
+                            ],
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Email (optional)
+                    _field(
+                      controller: _emailCtrl,
+                      label: 'Email Address',
+                      hint: 'client@example.com (optional)',
+                      keyboardType: TextInputType.emailAddress,
+                      prefixIcon: const Icon(Icons.email_outlined),
+                      onChanged: (v) {
+                        p.clientEmail =
+                            v.trim().isEmpty ? null : v.trim();
+                        p.notify();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── INFO BANNER ──────────────────────────────────
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.goldLight,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: AppTheme.accentColor.withAlpha(80)),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.lock_outline,
+                        size: 14, color: AppTheme.accentColor),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Client information is stored securely and never shared. '
+                        'Only you can access this data.',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textSecondary),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+Run in this exact order:
+
+1. Backend:
+   dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. Flutter:
+   flutter analyze
+   → Must show: No issues found!
+
+3. Manual checks:
+
+   BACKEND:
+   a. DeleteCase — [Authorize(Policy = "Lawyer")] confirmed
+   b. DeleteCase — solo lawyer check with CaseLawyers.Any present
+   c. DeleteCase — firm lawyer restricted to FirmAdmin/SuperAdmin
+   d. DeleteHearing — [Authorize(Policy = "Lawyer")] confirmed
+   e. DeleteHearing — solo lawyer check via Case.CaseLawyers present
+   f. DeleteHearing — firm lawyer restricted to FirmAdmin/SuperAdmin
+
+   FLUTTER add_case_screen.dart:
+   g. flutter/services import present at top
+   h. _courtTypeLabels map present in _AddCaseScreenState
+   i. _validateCurrentPage checks Tribunal/ConsumerCourt/SpecialCourt
+   j. initState syncs titleCtrl and caseNumberCtrl from provider
+   k. _Screen2 is a StatefulWidget — NOT StatelessWidget
+   l. clientType selector has 3 options: Individual, Company, Firm
+   m. Company/Firm fields only show when clientType != Individual
+   n. Phone field has 10-digit regex validator
+   o. WhatsApp toggle shows/hides correctly
+   p. WhatsApp same-as-phone checkbox auto-fills
+   q. FilteringTextInputFormatter used for phone and age fields
+
+====================================================================
+WHAT NOT TO TOUCH
+====================================================================
+Backend:
+- CasesController.CreateCase — do not touch
+- CasesController.GetCases — do not touch
+- HearingsController.CreateHearing — do not touch
+- HearingsController.GetHearings — do not touch
+- Any migration files
+- Any other controller
+
+Flutter:
+- _Screen1 — do not touch
+- _Screen3, _Screen4, _Screen5, _Screen6 placeholders — do not touch
+- case_detail_screen.dart — do not touch
+- cases_list_screen.dart — do not touch
+- AddCaseProvider — do not touch
+- CourtDataService — do not touch
+- main.dart — do not touch
+
+====================================================================
+END OF STEP 6
+====================================================================

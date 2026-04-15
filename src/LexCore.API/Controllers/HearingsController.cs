@@ -32,18 +32,31 @@ public class HearingsController : ControllerBase
     public async Task<ActionResult<ApiResponse<HearingDto>>> CreateHearing([FromBody] CreateHearingRequest request)
     {
         var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
 
-        var caseEntity = await _context.Cases.FirstOrDefaultAsync(c => c.Id == request.CaseId && c.FirmId == firmId);
+        // Security: solo lawyers must own the case via CaseLawyers
+        var caseEntity = await _context.Cases
+            .Include(c => c.CaseLawyers)
+            .FirstOrDefaultAsync(c =>
+                c.Id == request.CaseId &&
+                (firmId.HasValue
+                    ? c.FirmId == firmId.Value
+                    : c.FirmId == null &&
+                      c.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
         if (caseEntity == null)
         {
-            return BadRequest(ApiResponse<HearingDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 400));
+            return BadRequest(ApiResponse<HearingDto>.ErrorResponse(
+                "Case not found", "CASE_NOT_FOUND", 400));
         }
 
         var hearing = new Hearing
         {
             FirmId = firmId,
             CaseId = request.CaseId,
-            HearingDate = request.HearingDate.Date,
+            HearingDate = DateTime.SpecifyKind(request.HearingDate.Date, DateTimeKind.Utc),
             HearingTime = request.HearingTime,
             CourtName = request.CourtName,
             JudgeName = request.JudgeName,
@@ -54,9 +67,13 @@ public class HearingsController : ControllerBase
         await _context.Hearings.AddAsync(hearing);
         await _context.SaveChangesAsync();
 
-        // Schedule reminder 24 hours before
-        var hearingDateTime = hearing.HearingDate.Add(hearing.HearingTime);
-        HearingReminderJob.ScheduleReminder(hearing.Id, hearingDateTime);
+        // Schedule reminder 24 hours before (non-fatal if Hangfire is unavailable)
+        try
+        {
+            var hearingDateTime = hearing.HearingDate.Add(hearing.HearingTime);
+            HearingReminderJob.ScheduleReminder(hearing.Id, hearingDateTime);
+        }
+        catch (Exception) { /* Reminder scheduling is best-effort */ }
 
         await _auditService.LogAsync("HEARING_CREATED", "Hearing", hearing.Id, ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
 
@@ -74,7 +91,14 @@ public class HearingsController : ControllerBase
             Status = hearing.Status.ToString(),
             ReminderSent = hearing.ReminderSent,
             CreatedAt = hearing.CreatedAt,
-            UpdatedAt = hearing.UpdatedAt
+            UpdatedAt = hearing.UpdatedAt,
+            Outcome = hearing.Outcome,
+            JudgeOrder = hearing.JudgeOrder,
+            NextHearingDate = hearing.NextHearingDate,
+            NextHearingTime = hearing.NextHearingTime,
+            ActionRequired = hearing.ActionRequired,
+            UpdatedAfterHearing = hearing.UpdatedAfterHearing,
+            UpdatedAfterAt = hearing.UpdatedAfterAt,
         }, "Hearing scheduled successfully"));
     }
 
@@ -87,7 +111,7 @@ public class HearingsController : ControllerBase
 
         var query = _context.Hearings
             .Include(h => h.Case)
-            .Where(h => h.FirmId == firmId)
+            .Where(h => firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null)
             .AsQueryable();
 
         if (role == UserRole.Lawyer.ToString())
@@ -152,7 +176,7 @@ public class HearingsController : ControllerBase
 
         var query = _context.Hearings
             .Include(h => h.Case)
-            .Where(h => h.FirmId == firmId && h.HearingDate >= startDate && h.HearingDate <= endDate);
+            .Where(h => (firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null) && h.HearingDate >= startDate && h.HearingDate <= endDate);
 
         if (role == UserRole.Lawyer.ToString())
         {
@@ -207,7 +231,7 @@ public class HearingsController : ControllerBase
                 .ThenInclude(c => c!.CaseLawyers)
             .Include(h => h.Case)
                 .ThenInclude(c => c!.CaseClients)
-            .FirstOrDefaultAsync(h => h.Id == id && h.FirmId == firmId);
+            .FirstOrDefaultAsync(h => h.Id == id && (firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null));
 
         if (hearing == null)
         {
@@ -238,7 +262,14 @@ public class HearingsController : ControllerBase
             Status = hearing.Status.ToString(),
             ReminderSent = hearing.ReminderSent,
             CreatedAt = hearing.CreatedAt,
-            UpdatedAt = hearing.UpdatedAt
+            UpdatedAt = hearing.UpdatedAt,
+            Outcome = hearing.Outcome,
+            JudgeOrder = hearing.JudgeOrder,
+            NextHearingDate = hearing.NextHearingDate,
+            NextHearingTime = hearing.NextHearingTime,
+            ActionRequired = hearing.ActionRequired,
+            UpdatedAfterHearing = hearing.UpdatedAfterHearing,
+            UpdatedAfterAt = hearing.UpdatedAfterAt,
         };
 
         return Ok(ApiResponse<HearingDto>.SuccessResponse(dto));
@@ -249,10 +280,20 @@ public class HearingsController : ControllerBase
     public async Task<ActionResult<ApiResponse<HearingDto>>> UpdateHearing(Guid id, [FromBody] UpdateHearingRequest request)
     {
         var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
 
+        // Security: solo lawyers can only update hearings from their own cases
         var hearing = await _context.Hearings
             .Include(h => h.Case)
-            .FirstOrDefaultAsync(h => h.Id == id && h.FirmId == firmId);
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(h =>
+                h.Id == id &&
+                (firmId.HasValue
+                    ? h.FirmId == firmId.Value
+                    : h.FirmId == null &&
+                      h.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
 
         if (hearing == null)
         {
@@ -260,7 +301,7 @@ public class HearingsController : ControllerBase
         }
 
         if (request.HearingDate.HasValue)
-            hearing.HearingDate = request.HearingDate.Value.Date;
+            hearing.HearingDate = DateTime.SpecifyKind(request.HearingDate.Value.Date, DateTimeKind.Utc);
         if (request.HearingTime.HasValue)
             hearing.HearingTime = request.HearingTime.Value;
         if (request.CourtName != null)
@@ -269,6 +310,18 @@ public class HearingsController : ControllerBase
             hearing.JudgeName = request.JudgeName;
         if (request.Notes != null)
             hearing.Notes = request.Notes;
+
+        // If date or time changed, reset reminder and reschedule
+        if (request.HearingDate.HasValue || request.HearingTime.HasValue)
+        {
+            hearing.ReminderSent = false;
+            try
+            {
+                var hearingDateTime = hearing.HearingDate.Add(hearing.HearingTime);
+                HearingReminderJob.ScheduleReminder(hearing.Id, hearingDateTime);
+            }
+            catch (Exception) { /* Reminder scheduling is best-effort */ }
+        }
 
         await _context.SaveChangesAsync();
         await _auditService.LogAsync("HEARING_UPDATED", "Hearing", id, ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
@@ -287,7 +340,14 @@ public class HearingsController : ControllerBase
             Status = hearing.Status.ToString(),
             ReminderSent = hearing.ReminderSent,
             CreatedAt = hearing.CreatedAt,
-            UpdatedAt = hearing.UpdatedAt
+            UpdatedAt = hearing.UpdatedAt,
+            Outcome = hearing.Outcome,
+            JudgeOrder = hearing.JudgeOrder,
+            NextHearingDate = hearing.NextHearingDate,
+            NextHearingTime = hearing.NextHearingTime,
+            ActionRequired = hearing.ActionRequired,
+            UpdatedAfterHearing = hearing.UpdatedAfterHearing,
+            UpdatedAfterAt = hearing.UpdatedAfterAt,
         }));
     }
 
@@ -296,10 +356,20 @@ public class HearingsController : ControllerBase
     public async Task<ActionResult<ApiResponse<HearingDto>>> UpdateHearingStatus(Guid id, [FromBody] UpdateHearingStatusRequest request)
     {
         var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
 
+        // Security: solo lawyers can only update status of their own hearings
         var hearing = await _context.Hearings
             .Include(h => h.Case)
-            .FirstOrDefaultAsync(h => h.Id == id && h.FirmId == firmId);
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(h =>
+                h.Id == id &&
+                (firmId.HasValue
+                    ? h.FirmId == firmId.Value
+                    : h.FirmId == null &&
+                      h.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
 
         if (hearing == null)
         {
@@ -326,26 +396,155 @@ public class HearingsController : ControllerBase
             Status = hearing.Status.ToString(),
             ReminderSent = hearing.ReminderSent,
             CreatedAt = hearing.CreatedAt,
-            UpdatedAt = hearing.UpdatedAt
+            UpdatedAt = hearing.UpdatedAt,
+            Outcome = hearing.Outcome,
+            JudgeOrder = hearing.JudgeOrder,
+            NextHearingDate = hearing.NextHearingDate,
+            NextHearingTime = hearing.NextHearingTime,
+            ActionRequired = hearing.ActionRequired,
+            UpdatedAfterHearing = hearing.UpdatedAfterHearing,
+            UpdatedAfterAt = hearing.UpdatedAfterAt,
         }));
     }
 
+    [HttpPatch("{id:guid}/outcome")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<HearingDto>>> RecordHearingOutcome(
+        Guid id, [FromBody] PostHearingUpdateRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only record outcome for their own hearings
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(h =>
+                h.Id == id &&
+                (firmId.HasValue
+                    ? h.FirmId == firmId.Value
+                    : h.FirmId == null &&
+                      h.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (hearing == null)
+            return NotFound(ApiResponse<HearingDto>.ErrorResponse(
+                "Hearing not found", "NOT_FOUND", 404));
+
+        hearing.Status = request.Outcome switch
+        {
+            "Completed" => HearingStatus.Completed,
+            "Adjourned" => HearingStatus.Adjourned,
+            "PartHeard" => HearingStatus.Adjourned,
+            "Stayed"    => HearingStatus.Adjourned,
+            _           => HearingStatus.Completed
+        };
+
+        hearing.Outcome = request.Outcome;
+        hearing.JudgeOrder = request.JudgeOrder;
+        hearing.ActionRequired = request.ActionRequired;
+        hearing.NextHearingDate = request.NextHearingDate.HasValue
+            ? DateTime.SpecifyKind(request.NextHearingDate.Value.Date, DateTimeKind.Utc)
+            : null;
+        hearing.NextHearingTime = request.NextHearingTime;
+        hearing.UpdatedAfterHearing = true;
+        hearing.UpdatedAfterAt = DateTime.UtcNow;
+
+        Hearing? nextHearing = null;
+        if ((request.Outcome == "Adjourned" || request.Outcome == "PartHeard")
+            && request.CreateNextHearing
+            && request.NextHearingDate.HasValue)
+        {
+            nextHearing = new Hearing
+            {
+                FirmId = firmId,
+                CaseId = hearing.CaseId,
+                HearingDate = DateTime.SpecifyKind(
+                    request.NextHearingDate.Value.Date, DateTimeKind.Utc),
+                HearingTime = request.NextHearingTime ?? new TimeSpan(10, 30, 0),
+                CourtName = hearing.CourtName,
+                JudgeName = hearing.JudgeName,
+                Status = HearingStatus.Scheduled
+            };
+            await _context.Hearings.AddAsync(nextHearing);
+
+            try
+            {
+                var dt = nextHearing.HearingDate.Add(nextHearing.HearingTime);
+                HearingReminderJob.ScheduleReminder(nextHearing.Id, dt);
+            }
+            catch (Exception) { }
+        }
+
+        await _context.SaveChangesAsync();
+        await _auditService.LogAsync("HEARING_OUTCOME_RECORDED", "Hearing", id,
+            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(ApiResponse<HearingDto>.SuccessResponse(new HearingDto
+        {
+            Id = hearing.Id,
+            CaseId = hearing.CaseId,
+            CaseNumber = hearing.Case!.CaseNumber,
+            CaseTitle = hearing.Case.Title,
+            HearingDate = hearing.HearingDate,
+            HearingTime = hearing.HearingTime,
+            CourtName = hearing.CourtName,
+            JudgeName = hearing.JudgeName,
+            Notes = hearing.Notes,
+            Status = hearing.Status.ToString(),
+            ReminderSent = hearing.ReminderSent,
+            CreatedAt = hearing.CreatedAt,
+            UpdatedAt = hearing.UpdatedAt,
+            Outcome = hearing.Outcome,
+            JudgeOrder = hearing.JudgeOrder,
+            NextHearingDate = hearing.NextHearingDate,
+            NextHearingTime = hearing.NextHearingTime,
+            ActionRequired = hearing.ActionRequired,
+            UpdatedAfterHearing = hearing.UpdatedAfterHearing,
+            UpdatedAfterAt = hearing.UpdatedAfterAt,
+        }, nextHearing != null
+            ? "Outcome recorded. Next hearing scheduled."
+            : "Outcome recorded successfully."));
+    }
+
     [HttpDelete("{id:guid}")]
-    [Authorize(Policy = "FirmAdmin")]
+    [Authorize(Policy = "Lawyer")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteHearing(Guid id)
     {
         var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+        var role = _tenantService.GetCurrentUserRole();
 
-        var hearing = await _context.Hearings.FirstOrDefaultAsync(h => h.Id == id && h.FirmId == firmId);
+        // Security: solo lawyers can only delete hearings from their own cases
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(h =>
+                h.Id == id &&
+                (firmId.HasValue
+                    ? h.FirmId == firmId.Value
+                    : h.FirmId == null &&
+                      h.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
 
         if (hearing == null)
         {
-            return NotFound(ApiResponse<object>.ErrorResponse("Hearing not found", "NOT_FOUND", 404));
+            return NotFound(ApiResponse<object>.ErrorResponse(
+                "Hearing not found", "NOT_FOUND", 404));
+        }
+
+        // Firm lawyers: only FirmAdmin can delete hearings
+        if (firmId.HasValue && role != UserRole.FirmAdmin.ToString() && role != UserRole.SuperAdmin.ToString())
+        {
+            return Forbid();
         }
 
         hearing.DeletedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
-        await _auditService.LogAsync("HEARING_DELETED", "Hearing", id, ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
+        await _auditService.LogAsync("HEARING_DELETED", "Hearing", id,
+            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(ApiResponse<object>.SuccessResponse(null!, "Hearing deleted successfully"));
     }

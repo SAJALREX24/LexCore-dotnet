@@ -3,26 +3,46 @@ using LexCore.Domain.Enums;
 
 namespace LexCore.Application.DTOs.Auth;
 
-public class RegisterFirmRequest
+public class RegisterLawyerRequest
 {
     [Required]
     [StringLength(200)]
-    public string FirmName { get; set; } = string.Empty;
-
-    [Required]
-    [StringLength(200)]
-    public string AdminName { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
 
     [Required]
     [EmailAddress]
     public string Email { get; set; } = string.Empty;
 
     [Required]
+    [Phone]
+    public string Phone { get; set; } = string.Empty;
+
+    [Required]
     [MinLength(8)]
     public string Password { get; set; } = string.Empty;
 
-    public string? GstNumber { get; set; }
-    public string? Address { get; set; }
+    public string? BarEnrollmentNumber { get; set; }
+    public string? CourtType { get; set; }
+    public string? State { get; set; }
+    public string? City { get; set; }
+}
+
+public class SendOtpRequest
+{
+    [Required]
+    [Phone]
+    public string Phone { get; set; } = string.Empty;
+}
+
+public class VerifyOtpRequest
+{
+    [Required]
+    [Phone]
+    public string Phone { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(6, MinimumLength = 6)]
+    public string Otp { get; set; } = string.Empty;
 }
 
 public class LoginRequest
@@ -99,6 +119,12 @@ public class UserDto
     public Guid? FirmId { get; set; }
     public string? FirmName { get; set; }
     public bool IsVerified { get; set; }
+    public bool IsPhoneVerified { get; set; }
+    public string? Phone { get; set; }
+    public string? BarEnrollmentNumber { get; set; }
+    public string? CourtType { get; set; }
+    public string? State { get; set; }
+    public string? City { get; set; }
     public DateTime? LastLogin { get; set; }
     public DateTime CreatedAt { get; set; }
 }

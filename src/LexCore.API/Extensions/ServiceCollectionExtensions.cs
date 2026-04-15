@@ -4,10 +4,12 @@ using FluentValidation;
 using FluentValidation.AspNetCore;
 using Hangfire;
 using Hangfire.Redis.StackExchange;
+using LexCore.Application.Configuration;
 using LexCore.Application.Interfaces;
 using LexCore.Application.Validators;
 using LexCore.Infrastructure.Data;
 using LexCore.Infrastructure.Jobs;
+using LexCore.Infrastructure.Repositories;
 using LexCore.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -47,6 +49,7 @@ public static class ServiceCollectionExtensions
         {
             config.UseInMemoryStorage();
         });
+        services.AddHangfireServer();
 
         // Services
         services.AddScoped<ITenantService, TenantService>();
@@ -58,16 +61,47 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRazorpayService, RazorpayService>();
         services.AddScoped<DataSeeder>();
         services.AddScoped<HearingReminderJob>();
+        services.AddScoped<NotificationJobs>();
 
-        // HTTP Client Factory
+        // HTTP Clients
         services.AddHttpClient("Razorpay");
 
-        // HTTP Client Factory
-        services.AddHttpClient("Razorpay");
-        services.AddScoped<IAiService, AiService>();
+        // Notification HTTP clients
+        services.AddHttpClient<IFcmService, FcmService>()
+            .SetHandlerLifetime(TimeSpan.FromMinutes(5));
+
+        services.AddHttpClient<IWhatsAppService, WhatsAppService>()
+            .SetHandlerLifetime(TimeSpan.FromMinutes(5));
+
+        // Notification services
+        services.AddScoped<INotificationRepository, NotificationRepository>();
+        services.AddScoped<INotificationService, NotificationService>();
+
+        // AI Configuration
+        var aiConfig = configuration.GetSection("AiConfiguration").Get<AiConfiguration>() ?? new AiConfiguration();
+        var apiKey = Environment.GetEnvironmentVariable("AI_API_KEY") ?? aiConfig.ApiKey;
+        services.Configure<AiConfiguration>(opts =>
+        {
+            configuration.GetSection("AiConfiguration").Bind(opts);
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AI_API_KEY")))
+                opts.ApiKey = Environment.GetEnvironmentVariable("AI_API_KEY")!;
+        });
+
+        services.AddHttpClient("AnthropicAI", client =>
+        {
+            client.BaseAddress = new Uri(aiConfig.BaseUrl);
+            client.DefaultRequestHeaders.Add("x-api-key", apiKey);
+            client.DefaultRequestHeaders.Add("anthropic-version", aiConfig.AnthropicVersion);
+            client.Timeout = TimeSpan.FromSeconds(aiConfig.TimeoutSeconds);
+        });
+
+        services.AddScoped<IAiOrchestrationService, AiOrchestrationService>();
+        services.AddScoped<ISmartExtractService, SmartExtractService>();
+        services.AddScoped<IResearchCacheService, ResearchCacheService>();
+        services.AddSingleton<LegalQueryValidator>();
 
         // FluentValidation
-        services.AddValidatorsFromAssemblyContaining<RegisterFirmRequestValidator>();
+        services.AddValidatorsFromAssemblyContaining<RegisterLawyerRequestValidator>();
 
         return services;
     }
@@ -161,17 +195,24 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddCorsPolicy(this IServiceCollection services, IConfiguration configuration)
     {
-        var allowedOrigins = configuration["Cors:AllowedOrigins"]?.Split(',') ?? Array.Empty<string>();
-
         services.AddCors(options =>
         {
             options.AddPolicy("LexCorePolicy", builder =>
             {
                 builder
-                    .WithOrigins(allowedOrigins)
+                    .WithOrigins(
+                        // Cloudflare tunnel — update this when tunnel URL changes
+                        "https://outlets-plans-beverage-conducting.trycloudflare.com",
+                        // Local dev — Flutter web or browser testing
+                        "http://localhost:3000",
+                        "http://localhost:5000",
+                        "http://127.0.0.1:5000"
+                    )
                     .AllowAnyMethod()
-                    .AllowAnyHeader()
-                    .AllowCredentials();
+                    .AllowAnyHeader();
+                // NOTE: Flutter mobile APK does not use CORS (direct HTTP client)
+                // CORS only applies to browser-based requests
+                // When deploying to production, replace with actual domain
             });
         });
 

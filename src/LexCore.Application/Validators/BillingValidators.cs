@@ -10,9 +10,6 @@ public class CreateInvoiceRequestValidator : AbstractValidator<CreateInvoiceRequ
         RuleFor(x => x.CaseId)
             .NotEmpty().WithMessage("Case ID is required");
 
-        RuleFor(x => x.ClientId)
-            .NotEmpty().WithMessage("Client ID is required");
-
         RuleFor(x => x.Amount)
             .GreaterThan(0).WithMessage("Amount must be greater than zero");
 

@@ -20,16 +20,20 @@ public class DocumentsController : ControllerBase
     private readonly IStorageService _storageService;
     private readonly IAuditService _auditService;
 
+    private readonly IConfiguration _configuration;
+
     public DocumentsController(
         AppDbContext context,
         ITenantService tenantService,
         IStorageService storageService,
-        IAuditService auditService)
+        IAuditService auditService,
+        IConfiguration configuration)
     {
         _context = context;
         _tenantService = tenantService;
         _storageService = storageService;
         _auditService = auditService;
+        _configuration = configuration;
     }
 
     [HttpPost("upload")]
@@ -41,22 +45,35 @@ public class DocumentsController : ControllerBase
             return BadRequest(ApiResponse<DocumentDto>.ErrorResponse("No file uploaded", "NO_FILE", 400));
         }
 
-        if (file.Length > 50 * 1024 * 1024)
+        if (file.Length > 10 * 1024 * 1024)
         {
-            return BadRequest(ApiResponse<DocumentDto>.ErrorResponse("File size must be less than 50MB", "FILE_TOO_LARGE", 400));
+            return BadRequest(ApiResponse<DocumentDto>.ErrorResponse("File size must be less than 10MB", "FILE_TOO_LARGE", 400));
+        }
+
+        if (!IsAllowedFileType(file))
+        {
+            return BadRequest(ApiResponse<DocumentDto>.ErrorResponse(
+                "Only JPG, PNG and PDF files are allowed",
+                "INVALID_FILE_TYPE", 400));
         }
 
         var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
-        var caseExists = await _context.Cases.AnyAsync(c => c.Id == request.CaseId && c.FirmId == firmId);
+        var caseExists = await _context.Cases.AnyAsync(c =>
+            c.Id == request.CaseId &&
+            (firmId.HasValue
+                ? c.FirmId == firmId.Value
+                : c.FirmId == null &&
+                  c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)));
         if (!caseExists)
         {
             return BadRequest(ApiResponse<DocumentDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 400));
         }
 
         using var stream = file.OpenReadStream();
-        var fileUrl = await _storageService.UploadFileAsync(stream, file.FileName, file.ContentType, $"documents/{firmId}/{request.CaseId}");
+        var folderOwner = firmId.HasValue ? firmId.Value.ToString() : userId.ToString();
+        var fileUrl = await _storageService.UploadFileAsync(stream, file.FileName, file.ContentType, $"documents/{folderOwner}/{request.CaseId}");
 
         var document = new Document
         {
@@ -70,7 +87,11 @@ public class DocumentsController : ControllerBase
             Version = 1,
             IsClientVisible = request.IsClientVisible,
             Tags = request.Tags,
-            Description = request.Description
+            Description = request.Description,
+            DocumentCategory = request.DocumentCategory,
+            DocumentTag = request.DocumentTag,
+            DocumentSource = request.DocumentSource ?? "DirectUpload",
+            HearingId = request.HearingId,
         };
 
         await _context.Documents.AddAsync(document);
@@ -109,8 +130,15 @@ public class DocumentsController : ControllerBase
     }
 
     [HttpGet("case/{caseId:guid}")]
-    public async Task<ActionResult<ApiResponse<List<DocumentDto>>>> GetCaseDocuments(Guid caseId)
+    public async Task<ActionResult<ApiResponse<List<DocumentDto>>>> GetCaseDocuments(
+        Guid caseId,
+        [FromQuery] string? category = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
     {
+        // Cap page size — never return more than 100 at once
+        if (pageSize > 100) pageSize = 100;
+        if (page < 1) page = 1;
         var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
         var role = _tenantService.GetCurrentUserRole();
@@ -118,7 +146,7 @@ public class DocumentsController : ControllerBase
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers)
             .Include(c => c.CaseClients)
-            .FirstOrDefaultAsync(c => c.Id == caseId && c.FirmId == firmId);
+            .FirstOrDefaultAsync(c => c.Id == caseId && (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
 
         if (caseEntity == null)
         {
@@ -137,15 +165,24 @@ public class DocumentsController : ControllerBase
 
         var query = _context.Documents
             .Include(d => d.Uploader)
-            .Where(d => d.CaseId == caseId && d.FirmId == firmId);
+            .Where(d => d.CaseId == caseId && (firmId.HasValue ? d.FirmId == firmId.Value : d.FirmId == null));
 
         if (role == UserRole.Client.ToString())
         {
             query = query.Where(d => d.IsClientVisible);
         }
 
+        if (!string.IsNullOrEmpty(category))
+        {
+            query = query.Where(d => d.DocumentCategory == category);
+        }
+
+        var totalCount = await query.CountAsync();
+
         var documents = await query
             .OrderByDescending(d => d.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(d => new DocumentDto
             {
                 Id = d.Id,
@@ -158,13 +195,26 @@ public class DocumentsController : ControllerBase
                 IsClientVisible = d.IsClientVisible,
                 Tags = d.Tags,
                 Description = d.Description,
+                DocumentCategory = d.DocumentCategory,
+                DocumentTag = d.DocumentTag,
+                DocumentSource = d.DocumentSource,
+                HearingId = d.HearingId,
+                AIDraftStatus = d.AIDraftStatus,
                 UploadedByName = d.Uploader!.Name,
                 CreatedAt = d.CreatedAt,
                 UpdatedAt = d.UpdatedAt
             })
             .ToListAsync();
 
-        return Ok(ApiResponse<List<DocumentDto>>.SuccessResponse(documents));
+        return Ok(new
+        {
+            success = true,
+            data = documents,
+            page = page,
+            pageSize = pageSize,
+            totalCount = totalCount,
+            totalPages = (int)Math.Ceiling((double)totalCount / pageSize)
+        });
     }
 
     [HttpGet("{id:guid}/download")]
@@ -179,7 +229,7 @@ public class DocumentsController : ControllerBase
                 .ThenInclude(c => c!.CaseLawyers)
             .Include(d => d.Case)
                 .ThenInclude(c => c!.CaseClients)
-            .FirstOrDefaultAsync(d => d.Id == id && d.FirmId == firmId);
+            .FirstOrDefaultAsync(d => d.Id == id && (firmId.HasValue ? d.FirmId == firmId.Value : d.FirmId == null));
 
         if (document == null)
         {
@@ -201,6 +251,14 @@ public class DocumentsController : ControllerBase
             }
         }
 
+        // For S3 — redirect to signed URL (no data proxied through API)
+        if (document.FileUrl.StartsWith("s3://"))
+        {
+            var signedUrl = await _storageService.GetSignedUrlAsync(document.FileUrl, 60);
+            return Redirect(signedUrl);
+        }
+
+        // For local storage — stream directly (development only)
         var stream = await _storageService.DownloadFileAsync(document.FileUrl);
         if (stream == null)
         {
@@ -215,11 +273,21 @@ public class DocumentsController : ControllerBase
     public async Task<ActionResult<ApiResponse<DocumentDto>>> UpdateDocument(Guid id, [FromBody] UpdateDocumentRequest request)
     {
         var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
 
+        // Security: solo lawyers can only update documents from their own cases
         var document = await _context.Documents
             .Include(d => d.Uploader)
             .Include(d => d.Case)
-            .FirstOrDefaultAsync(d => d.Id == id && d.FirmId == firmId);
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(d =>
+                d.Id == id &&
+                (firmId.HasValue
+                    ? d.FirmId == firmId.Value
+                    : d.FirmId == null &&
+                      d.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
 
         if (document == null)
         {
@@ -259,8 +327,20 @@ public class DocumentsController : ControllerBase
     public async Task<ActionResult<ApiResponse<object>>> DeleteDocument(Guid id)
     {
         var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
 
-        var document = await _context.Documents.FirstOrDefaultAsync(d => d.Id == id && d.FirmId == firmId);
+        // Security: solo lawyers can only delete documents from their own cases
+        var document = await _context.Documents
+            .Include(d => d.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(d =>
+                d.Id == id &&
+                (firmId.HasValue
+                    ? d.FirmId == firmId.Value
+                    : d.FirmId == null &&
+                      d.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
 
         if (document == null)
         {
@@ -280,24 +360,57 @@ public class DocumentsController : ControllerBase
     {
         if (file == null || file.Length == 0)
         {
-            return BadRequest(ApiResponse<DocumentDto>.ErrorResponse("No file uploaded", "NO_FILE", 400));
+            return BadRequest(ApiResponse<DocumentDto>.ErrorResponse(
+                "No file uploaded", "NO_FILE", 400));
+        }
+
+        // File size limit — same as original upload
+        if (file.Length > 10 * 1024 * 1024)
+        {
+            return BadRequest(ApiResponse<DocumentDto>.ErrorResponse(
+                "File size must be less than 10MB", "FILE_TOO_LARGE", 400));
+        }
+
+        // File type validation — magic bytes check, same as original upload
+        if (!IsAllowedFileType(file))
+        {
+            return BadRequest(ApiResponse<DocumentDto>.ErrorResponse(
+                "Only JPG, PNG and PDF files are allowed",
+                "INVALID_FILE_TYPE", 400));
         }
 
         var firmId = _tenantService.GetCurrentFirmId();
         var userId = _tenantService.GetCurrentUserId();
 
+        // Security: solo lawyers can only version their own case documents
         var document = await _context.Documents
             .Include(d => d.Uploader)
             .Include(d => d.Case)
-            .FirstOrDefaultAsync(d => d.Id == id && d.FirmId == firmId);
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(d =>
+                d.Id == id &&
+                (firmId.HasValue
+                    ? d.FirmId == firmId.Value
+                    : d.FirmId == null &&
+                      d.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
 
         if (document == null)
         {
-            return NotFound(ApiResponse<DocumentDto>.ErrorResponse("Document not found", "NOT_FOUND", 404));
+            return NotFound(ApiResponse<DocumentDto>.ErrorResponse(
+                "Document not found", "NOT_FOUND", 404));
         }
 
+        // Use userId as folder owner for solo lawyers (firmId is null)
+        var folderOwner = firmId.HasValue
+            ? firmId.Value.ToString()
+            : userId.ToString();
+
         using var stream = file.OpenReadStream();
-        var fileUrl = await _storageService.UploadFileAsync(stream, file.FileName, file.ContentType, $"documents/{firmId}/{document.CaseId}");
+        var fileUrl = await _storageService.UploadFileAsync(
+            stream, file.FileName, file.ContentType,
+            $"documents/{folderOwner}/{document.CaseId}");
 
         document.Version++;
         document.FileUrl = fileUrl;
@@ -315,7 +428,8 @@ public class DocumentsController : ControllerBase
 
         await _context.DocumentVersions.AddAsync(version);
         await _context.SaveChangesAsync();
-        await _auditService.LogAsync("DOCUMENT_VERSION_UPLOADED", "Document", id, ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
+        await _auditService.LogAsync("DOCUMENT_VERSION_UPLOADED", "Document", id,
+            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(ApiResponse<DocumentDto>.SuccessResponse(new DocumentDto
         {
@@ -335,27 +449,128 @@ public class DocumentsController : ControllerBase
         }, "New version uploaded successfully"));
     }
 
+    // Serves locally-stored files using HMAC-signed tokens
+    // Only active when Storage:UseLocal = true
+    // In production, S3 signed URLs are used instead
+    [HttpGet("serve")]
+    [AllowAnonymous]  // Token itself is the auth — verified below
+    public async Task<IActionResult> ServeLocalFile(
+        [FromQuery] string path,
+        [FromQuery] long exp,
+        [FromQuery] string sig)
+    {
+        // Reject if missing params
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(sig))
+            return BadRequest("Invalid request");
+
+        // Check expiry
+        if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() > exp)
+            return Unauthorized("Link expired");
+
+        // Verify HMAC signature
+        var secret = _configuration["Storage:LocalSigningSecret"] ?? "dev-secret-change-in-prod";
+        var tokenData = $"{path}:{exp}";
+        using var hmac = new System.Security.Cryptography.HMACSHA256(
+            System.Text.Encoding.UTF8.GetBytes(secret));
+        var expectedHash = Convert.ToBase64String(
+            hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(tokenData)));
+        var safeExpected = expectedHash.Replace("+", "-").Replace("/", "_").Replace("=", "");
+
+        if (!string.Equals(sig, safeExpected, StringComparison.Ordinal))
+            return Unauthorized("Invalid signature");
+
+        // Path traversal protection — reject any path with ..
+        if (path.Contains("..") || path.Contains("\\"))
+            return BadRequest("Invalid path");
+
+        // Serve the file
+        var fileUrl = $"local://{path}";
+        var stream = await _storageService.DownloadFileAsync(fileUrl);
+        if (stream == null)
+            return NotFound("File not found");
+
+        // Determine content type from extension
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        var contentType = ext switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            _ => "application/octet-stream"
+        };
+
+        var fileName = System.IO.Path.GetFileName(path);
+        return File(stream, contentType, fileName);
+    }
+
+    private static readonly Dictionary<string, byte[]> _allowedMagicBytes = new()
+    {
+        { "image/jpeg", new byte[] { 0xFF, 0xD8, 0xFF } },
+        { "image/png",  new byte[] { 0x89, 0x50, 0x4E, 0x47 } },
+        { "application/pdf", new byte[] { 0x25, 0x50, 0x44, 0x46 } },
+    };
+
+    private static bool IsAllowedFileType(IFormFile file)
+    {
+        using var stream = file.OpenReadStream();
+        var header = new byte[4];
+        var read = stream.Read(header, 0, 4);
+        if (read < 3) return false;
+
+        foreach (var kvp in _allowedMagicBytes)
+        {
+            var magic = kvp.Value;
+            if (read >= magic.Length)
+            {
+                bool match = true;
+                for (int i = 0; i < magic.Length; i++)
+                {
+                    if (header[i] != magic[i]) { match = false; break; }
+                }
+                if (match) return true;
+            }
+        }
+        return false;
+    }
+
     [HttpGet("{id:guid}/versions")]
     public async Task<ActionResult<ApiResponse<List<DocumentVersionDto>>>> GetVersionHistory(Guid id)
     {
         var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
 
-        var document = await _context.Documents.FirstOrDefaultAsync(d => d.Id == id && d.FirmId == firmId);
+        // Security: solo lawyers can only view version history of their own documents
+        var document = await _context.Documents
+            .Include(d => d.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(d =>
+                d.Id == id &&
+                (firmId.HasValue
+                    ? d.FirmId == firmId.Value
+                    : d.FirmId == null &&
+                      d.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
         if (document == null)
         {
             return NotFound(ApiResponse<List<DocumentVersionDto>>.ErrorResponse("Document not found", "NOT_FOUND", 404));
         }
 
         var versions = await _context.DocumentVersions
+            .Include(v => v.Document)
             .Where(v => v.DocumentId == id)
             .OrderByDescending(v => v.VersionNumber)
-            .Select(v => new DocumentVersionDto
-            {
-                Id = v.Id,
-                VersionNumber = v.VersionNumber,
-                UploadedByName = _context.Users.Where(u => u.Id == v.UploadedBy).Select(u => u.Name).FirstOrDefault() ?? "",
-                UploadedAt = v.UploadedAt
-            })
+            .Take(50)   // documents rarely have more than 50 versions
+            .Join(_context.Users,
+                v => v.UploadedBy,
+                u => u.Id,
+                (v, u) => new DocumentVersionDto
+                {
+                    Id = v.Id,
+                    VersionNumber = v.VersionNumber,
+                    UploadedByName = u.Name,
+                    UploadedAt = v.UploadedAt
+                })
             .ToListAsync();
 
         return Ok(ApiResponse<List<DocumentVersionDto>>.SuccessResponse(versions));

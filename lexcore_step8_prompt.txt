@@ -1,0 +1,1133 @@
+====================================================================
+LEXCORE AI — STEP 8: BACKEND FIX + SCREEN 5 (FEES) + SCREEN 6 (NOTES & ALERTS)
+====================================================================
+
+YOU ARE AN EXPERT FLUTTER + .NET DEVELOPER WITH 20+ YEARS EXPERIENCE.
+READ EVERY INSTRUCTION BEFORE WRITING A SINGLE LINE.
+EXECUTE IN ORDER — BACKEND FIRST, THEN FLUTTER.
+
+====================================================================
+CRITICAL RULES
+====================================================================
+1. Backend: only touch Program.cs
+2. Flutter: only touch lib/screens/cases/add_case_screen.dart
+3. Replace _Screen5 and _Screen6 placeholders only
+4. Do NOT touch Screen 1, 2, 3, 4 — they are complete
+5. After backend: dotnet build → 0 errors
+6. After Flutter: flutter analyze → No issues found!
+7. Use AppTheme colors only — never hardcode hex
+8. If unsure — STOP. Do not guess.
+
+====================================================================
+PART A — BACKEND FIX (Program.cs)
+Hangfire Dashboard accessible to any authenticated user
+====================================================================
+FILE: src\LexCore.API\Program.cs
+
+FIND at the bottom of the file:
+public class HangfireAuthorizationFilter : IDashboardAuthorizationFilter
+{
+    public bool Authorize(DashboardContext context)
+    {
+        var httpContext = context.GetHttpContext();
+        // Allow in Development (for local testing)
+        // Require authentication in Production
+        return httpContext.User.Identity?.IsAuthenticated == true
+            || httpContext.RequestServices
+                .GetRequiredService<IWebHostEnvironment>()
+                .IsDevelopment();
+    }
+}
+
+REPLACE WITH:
+public class HangfireAuthorizationFilter : IDashboardAuthorizationFilter
+{
+    public bool Authorize(DashboardContext context)
+    {
+        var httpContext = context.GetHttpContext();
+        // Development: always allow (for local testing)
+        var isDev = httpContext.RequestServices
+            .GetRequiredService<IWebHostEnvironment>()
+            .IsDevelopment();
+        if (isDev) return true;
+
+        // Production: SuperAdmin only
+        // Any logged-in lawyer reaching /hangfire is a security risk
+        // They can manually trigger or delete scheduled jobs
+        return httpContext.User.IsInRole("SuperAdmin");
+    }
+}
+
+dotnet build → must show 0 errors, 0 warnings.
+
+====================================================================
+PART B — FLUTTER: SCREEN 5 AND 6
+====================================================================
+FILE: lib/screens/cases/add_case_screen.dart
+
+FIND this exact block:
+class _Screen5 extends StatelessWidget {
+  const _Screen5();
+  @override
+  Widget build(BuildContext context) => _PlaceholderScreen(
+    icon: Icons.account_balance_wallet_outlined,
+    title: 'Fee Agreement',
+    subtitle: 'Fee type, agreed amount, advance payment and vakalatnama',
+    step: 5,
+  );
+}
+
+class _Screen6 extends StatelessWidget {
+  const _Screen6();
+  @override
+  Widget build(BuildContext context) => _PlaceholderScreen(
+    icon: Icons.notifications_outlined,
+    title: 'Notes & Alerts',
+    subtitle: 'Private notes, client instructions and notification settings',
+    step: 6,
+  );
+}
+
+REPLACE WITH the complete implementations below.
+
+====================================================================
+SCREEN 5 — FEE AGREEMENT
+====================================================================
+
+// ════════════════════════════════════════════════════════════════
+// SCREEN 5 — FEE AGREEMENT
+// ════════════════════════════════════════════════════════════════
+
+class _Screen5 extends StatefulWidget {
+  const _Screen5();
+  @override
+  State<_Screen5> createState() => _Screen5State();
+}
+
+class _Screen5State extends State<_Screen5> {
+  final _agreedFeesCtrl = TextEditingController();
+  final _perHearingFeeCtrl = TextEditingController();
+  final _advanceCtrl = TextEditingController();
+  final _paymentRefCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final p = context.read<AddCaseProvider>();
+      _agreedFeesCtrl.text = p.agreedFees?.toStringAsFixed(0) ?? '';
+      _perHearingFeeCtrl.text = p.perHearingFee?.toStringAsFixed(0) ?? '';
+      _advanceCtrl.text = p.advancePaid?.toStringAsFixed(0) ?? '';
+      _paymentRefCtrl.text = p.paymentReference ?? '';
+    });
+  }
+
+  @override
+  void dispose() {
+    _agreedFeesCtrl.dispose();
+    _perHearingFeeCtrl.dispose();
+    _advanceCtrl.dispose();
+    _paymentRefCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── HELPERS ─────────────────────────────────────────────────────
+
+  Widget _sectionCard({required String title, required Widget child}) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: AppTheme.borderColor),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withAlpha(8),
+              blurRadius: 6,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: const BoxDecoration(
+              color: AppTheme.primaryColor,
+              borderRadius:
+                  BorderRadius.vertical(top: Radius.circular(12)),
+            ),
+            child: Text(title,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12)),
+          ),
+          Padding(padding: const EdgeInsets.all(14), child: child),
+        ],
+      ),
+    );
+  }
+
+  Widget _label(String text, {bool required = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: RichText(
+        text: TextSpan(
+          text: text,
+          style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w600),
+          children: required
+              ? const [
+                  TextSpan(
+                      text: ' *',
+                      style: TextStyle(color: AppTheme.errorColor))
+                ]
+              : [],
+        ),
+      ),
+    );
+  }
+
+  Widget _amountField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    bool required = false,
+    void Function(String)? onChanged,
+    String? Function(String?)? validator,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _label(label, required: required),
+        TextFormField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+          ],
+          onChanged: onChanged,
+          validator: validator,
+          textInputAction: TextInputAction.next,
+          decoration: InputDecoration(
+            hintText: hint,
+            prefixText: '₹ ',
+            prefixStyle: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontWeight: FontWeight.w600),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  Future<DateTime?> _pickDate(
+      BuildContext context, DateTime? current) async {
+    return showDatePicker(
+      context: context,
+      initialDate: current ?? DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: const ColorScheme.light(
+              primary: AppTheme.primaryColor,
+              secondary: AppTheme.accentColor),
+        ),
+        child: child!,
+      ),
+    );
+  }
+
+  // ── BUILD ────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AddCaseProvider>(
+      builder: (_, p, __) {
+        // Computed balance
+        final agreed = p.agreedFees ?? 0;
+        final advance = p.advancePaid ?? 0;
+        final balance = agreed - advance;
+        final hasBalance = agreed > 0;
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+
+              // ── FEE TYPE ─────────────────────────────────────
+              _sectionCard(
+                title: '💰 Fee Structure',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _label('Fee Type', required: true),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        'Fixed Fee',
+                        'Per Hearing',
+                        'Retainer',
+                        'Contingency',
+                        'Pro Bono',
+                      ].map((type) {
+                        final isSelected = p.feeType == type;
+                        return GestureDetector(
+                          onTap: () {
+                            p.feeType = type;
+                            // Clear fields not relevant to new type
+                            if (type == 'Per Hearing') {
+                              p.agreedFees = null;
+                              _agreedFeesCtrl.clear();
+                            }
+                            if (type == 'Fixed Fee' ||
+                                type == 'Retainer') {
+                              p.perHearingFee = null;
+                              _perHearingFeeCtrl.clear();
+                            }
+                            if (type == 'Pro Bono' ||
+                                type == 'Contingency') {
+                              p.agreedFees = null;
+                              p.advancePaid = null;
+                              p.perHearingFee = null;
+                              _agreedFeesCtrl.clear();
+                              _advanceCtrl.clear();
+                              _perHearingFeeCtrl.clear();
+                            }
+                            p.notify();
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? AppTheme.primaryColor
+                                  : AppTheme.surfaceColor,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isSelected
+                                    ? AppTheme.primaryColor
+                                    : AppTheme.borderColor,
+                                width: isSelected ? 2 : 1,
+                              ),
+                            ),
+                            child: Text(type,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : AppTheme.primaryColor)),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+
+                    // Fee type description
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.goldLight,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: AppTheme.accentColor.withAlpha(80)),
+                      ),
+                      child: Text(
+                        _feeTypeDescription(p.feeType),
+                        style: const TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textSecondary),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── FEE AMOUNT ────────────────────────────────────
+              if (p.feeType != 'Pro Bono' &&
+                  p.feeType != 'Contingency') ...[
+                _sectionCard(
+                  title: '📊 Fee Amount',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+
+                      // Fixed / Retainer — agreed fee
+                      if (p.feeType == 'Fixed Fee' ||
+                          p.feeType == 'Retainer')
+                        _amountField(
+                          controller: _agreedFeesCtrl,
+                          label: p.feeType == 'Retainer'
+                              ? 'Monthly Retainer Amount'
+                              : 'Agreed Fee Amount',
+                          hint: '50000',
+                          required: false,
+                          onChanged: (v) {
+                            p.agreedFees =
+                                v.isEmpty ? null : double.tryParse(v);
+                            p.notify();
+                          },
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return null;
+                            final fee = double.tryParse(v);
+                            if (fee != null && fee <= 0) {
+                              return 'Fee must be greater than 0';
+                            }
+                            return null;
+                          },
+                        ),
+
+                      // Per Hearing fee
+                      if (p.feeType == 'Per Hearing')
+                        _amountField(
+                          controller: _perHearingFeeCtrl,
+                          label: 'Fee Per Hearing',
+                          hint: '5000',
+                          required: false,
+                          onChanged: (v) {
+                            p.perHearingFee =
+                                v.isEmpty ? null : double.tryParse(v);
+                            p.notify();
+                          },
+                        ),
+
+                      // Advance paid
+                      _amountField(
+                        controller: _advanceCtrl,
+                        label: 'Advance Paid',
+                        hint: '10000',
+                        onChanged: (v) {
+                          p.advancePaid =
+                              v.isEmpty ? null : double.tryParse(v);
+                          p.notify();
+                        },
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return null;
+                          final adv = double.tryParse(v) ?? 0;
+                          final agr = p.agreedFees ?? 0;
+                          if (agr > 0 && adv > agr) {
+                            return 'Advance cannot exceed agreed fee (₹${agr.toStringAsFixed(0)})';
+                          }
+                          return null;
+                        },
+                      ),
+
+                      // Balance summary
+                      if (hasBalance) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: balance > 0
+                                ? AppTheme.backgroundColor
+                                : AppTheme.successColor.withAlpha(15),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: balance > 0
+                                  ? AppTheme.borderColor
+                                  : AppTheme.successColor.withAlpha(60),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                balance > 0
+                                    ? Icons.account_balance_wallet_outlined
+                                    : Icons.check_circle_outline,
+                                size: 18,
+                                color: balance > 0
+                                    ? AppTheme.warningColor
+                                    : AppTheme.successColor,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      balance > 0
+                                          ? 'Balance Due'
+                                          : 'Fully Paid',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: balance > 0
+                                              ? AppTheme.warningColor
+                                              : AppTheme.successColor,
+                                          fontWeight: FontWeight.w600),
+                                    ),
+                                    if (balance > 0)
+                                      Text(
+                                        '₹${balance.toStringAsFixed(0)}',
+                                        style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.textPrimary),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+
+              // ── PAYMENT DETAILS ───────────────────────────────
+              if (p.advancePaid != null && p.advancePaid! > 0) ...[
+                _sectionCard(
+                  title: '🧾 Payment Details',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _label('Payment Mode'),
+                      DropdownButtonFormField<String>(
+                        value: p.paymentMode,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          hintText: 'Select mode',
+                          prefixIcon:
+                              Icon(Icons.payment_outlined),
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 14),
+                        ),
+                        items: const [
+                          'Cash',
+                          'UPI',
+                          'Bank Transfer',
+                          'Cheque',
+                          'Demand Draft',
+                          'Other',
+                        ]
+                            .map((m) => DropdownMenuItem(
+                                value: m, child: Text(m)))
+                            .toList(),
+                        onChanged: (v) {
+                          p.paymentMode = v;
+                          p.notify();
+                        },
+                      ),
+                      const SizedBox(height: 12),
+
+                      _label('Reference / Transaction ID'),
+                      TextFormField(
+                        controller: _paymentRefCtrl,
+                        decoration: const InputDecoration(
+                          hintText:
+                              'UPI ref / cheque number / transfer ID',
+                          prefixIcon:
+                              Icon(Icons.receipt_outlined),
+                        ),
+                        onChanged: (v) {
+                          p.paymentReference =
+                              v.trim().isEmpty ? null : v.trim();
+                          p.notify();
+                        },
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: 12),
+
+                      _label('Payment Date'),
+                      InkWell(
+                        onTap: () async {
+                          final d = await _pickDate(
+                              context, p.advancePaymentDate);
+                          if (d != null) {
+                            p.advancePaymentDate = d;
+                            p.notify();
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(12),
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            prefixIcon:
+                                Icon(Icons.calendar_today_outlined),
+                          ),
+                          child: Text(
+                            p.advancePaymentDate != null
+                                ? DateFormat('dd MMM yyyy')
+                                    .format(p.advancePaymentDate!)
+                                : 'Select payment date',
+                            style: TextStyle(
+                              color: p.advancePaymentDate != null
+                                  ? AppTheme.textPrimary
+                                  : AppTheme.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              // ── VAKALATNAMA ───────────────────────────────────
+              _sectionCard(
+                title: '📋 Vakalatnama',
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.assignment_outlined,
+                            size: 20,
+                            color: AppTheme.textSecondary),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                            children: [
+                              Text('Vakalatnama Signed',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500)),
+                              Text(
+                                'Power of attorney signed by client',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: AppTheme.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Switch(
+                          value: p.vakalatnamaSigned,
+                          activeColor: AppTheme.primaryColor,
+                          onChanged: (v) {
+                            p.vakalatnamaSigned = v;
+                            p.notify();
+                          },
+                        ),
+                      ],
+                    ),
+                    if (p.vakalatnamaSigned) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppTheme.successColor.withAlpha(15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color:
+                                  AppTheme.successColor.withAlpha(60)),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.check_circle_outline,
+                                size: 14,
+                                color: AppTheme.successColor),
+                            SizedBox(width: 6),
+                            Text(
+                              'Vakalatnama marked as signed',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: AppTheme.successColor),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              // ── PRO BONO / CONTINGENCY INFO ───────────────────
+              if (p.feeType == 'Pro Bono' ||
+                  p.feeType == 'Contingency')
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.goldLight,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: AppTheme.accentColor.withAlpha(80)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.info_outline,
+                          size: 14, color: AppTheme.accentColor),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          p.feeType == 'Pro Bono'
+                              ? 'Pro Bono case — no fees will be charged. '
+                                'The case will be recorded without any fee agreement.'
+                              : 'Contingency case — fees are payable only '
+                                'upon successful outcome of the case.',
+                          style: const TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.textSecondary),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  String _feeTypeDescription(String feeType) {
+    switch (feeType) {
+      case 'Fixed Fee':
+        return 'A single agreed amount for the entire case regardless of hearings.';
+      case 'Per Hearing':
+        return 'Fees are charged per court appearance. Set the amount per hearing below.';
+      case 'Retainer':
+        return 'A recurring monthly fee to retain your services for this client.';
+      case 'Contingency':
+        return 'Fees are payable only upon successful outcome. No upfront charge.';
+      case 'Pro Bono':
+        return 'This case is taken up free of charge as a social service.';
+      default:
+        return '';
+    }
+  }
+}
+
+====================================================================
+SCREEN 6 — NOTES & ALERTS
+====================================================================
+
+// ════════════════════════════════════════════════════════════════
+// SCREEN 6 — NOTES & ALERTS
+// ════════════════════════════════════════════════════════════════
+
+class _Screen6 extends StatefulWidget {
+  const _Screen6();
+  @override
+  State<_Screen6> createState() => _Screen6State();
+}
+
+class _Screen6State extends State<_Screen6> {
+  final _privateNotesCtrl = TextEditingController();
+  final _clientInstructionsCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final p = context.read<AddCaseProvider>();
+      _privateNotesCtrl.text = p.privateNotesHtml ?? '';
+      _clientInstructionsCtrl.text = p.clientInstructionsHtml ?? '';
+    });
+  }
+
+  @override
+  void dispose() {
+    _privateNotesCtrl.dispose();
+    _clientInstructionsCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── HELPERS ─────────────────────────────────────────────────────
+
+  Widget _sectionCard({required String title, required Widget child}) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: AppTheme.borderColor),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withAlpha(8),
+              blurRadius: 6,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: const BoxDecoration(
+              color: AppTheme.primaryColor,
+              borderRadius:
+                  BorderRadius.vertical(top: Radius.circular(12)),
+            ),
+            child: Text(title,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12)),
+          ),
+          Padding(padding: const EdgeInsets.all(14), child: child),
+        ],
+      ),
+    );
+  }
+
+  Widget _alertRow({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required void Function(bool) onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: iconColor),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500)),
+                Text(subtitle,
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textSecondary)),
+              ],
+            ),
+          ),
+          Switch(
+            value: value,
+            activeColor: AppTheme.primaryColor,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── BUILD ────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AddCaseProvider>(
+      builder: (_, p, __) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+
+              // ── PRIVATE NOTES ─────────────────────────────────
+              _sectionCard(
+                title: '🔒 Private Notes',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextFormField(
+                      controller: _privateNotesCtrl,
+                      maxLines: 5,
+                      decoration: const InputDecoration(
+                        hintText:
+                            'Your private notes, strategy, key observations...\n'
+                            'Only visible to you — never shared.',
+                        alignLabelWithHint: true,
+                        prefixIcon: Padding(
+                          padding: EdgeInsets.only(bottom: 60),
+                          child: Icon(Icons.lock_outline,
+                              color: AppTheme.textSecondary),
+                        ),
+                      ),
+                      onChanged: (v) {
+                        p.privateNotesHtml =
+                            v.trim().isEmpty ? null : v.trim();
+                        p.notify();
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.goldLight,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: AppTheme.accentColor.withAlpha(80)),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.shield_outlined,
+                              size: 13, color: AppTheme.accentColor),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'These notes are encrypted and '
+                              'only visible to you. Clients cannot see this.',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: AppTheme.textSecondary),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── CLIENT INSTRUCTIONS ───────────────────────────
+              _sectionCard(
+                title: '📢 Client Instructions',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextFormField(
+                      controller: _clientInstructionsCtrl,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        hintText:
+                            'Instructions for your client...\n'
+                            'e.g. Bring original documents, attend all hearings.',
+                        alignLabelWithHint: true,
+                        prefixIcon: Padding(
+                          padding: EdgeInsets.only(bottom: 46),
+                          child: Icon(Icons.person_outline,
+                              color: AppTheme.textSecondary),
+                        ),
+                      ),
+                      onChanged: (v) {
+                        p.clientInstructionsHtml =
+                            v.trim().isEmpty ? null : v.trim();
+                        p.notify();
+                      },
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'This will be visible to your client in their portal.',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary,
+                          fontStyle: FontStyle.italic),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── HEARING ALERTS ────────────────────────────────
+              _sectionCard(
+                title: '🔔 Hearing Reminders',
+                child: Column(
+                  children: [
+                    _alertRow(
+                      icon: Icons.nights_stay_outlined,
+                      iconColor: AppTheme.primaryColor,
+                      title: 'Evening Reminder',
+                      subtitle: 'Day before hearing at 8 PM',
+                      value: p.hearingReminderEvening,
+                      onChanged: (v) {
+                        p.hearingReminderEvening = v;
+                        p.notify();
+                      },
+                    ),
+                    const Divider(height: 16),
+                    _alertRow(
+                      icon: Icons.wb_sunny_outlined,
+                      iconColor: AppTheme.accentColor,
+                      title: 'Morning Reminder',
+                      subtitle: 'Day of hearing at 7 AM',
+                      value: p.hearingReminderMorning,
+                      onChanged: (v) {
+                        p.hearingReminderMorning = v;
+                        p.notify();
+                      },
+                    ),
+                    const Divider(height: 16),
+
+                    // WhatsApp client notification
+                    // Synced with whatsAppEnabled from Screen 2
+                    _alertRow(
+                      icon: Icons.chat_outlined,
+                      iconColor: AppTheme.successColor,
+                      title: 'WhatsApp Client',
+                      subtitle: 'Send hearing reminder to client on WhatsApp',
+                      value: p.clientWhatsAppEnabled,
+                      onChanged: (v) {
+                        p.clientWhatsAppEnabled = v;
+                        // Keep Screen 2 flag in sync
+                        p.whatsAppEnabled = v;
+                        if (!v) {
+                          p.clientWhatsApp = null;
+                        }
+                        p.notify();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── CASE ALERTS ───────────────────────────────────
+              _sectionCard(
+                title: '⚠️ Case Alerts',
+                child: Column(
+                  children: [
+                    _alertRow(
+                      icon: Icons.warning_amber_outlined,
+                      iconColor: AppTheme.errorColor,
+                      title: 'Limitation Date Alert',
+                      subtitle:
+                          'Notify 30 days before limitation date expires',
+                      value: p.limitationAlertEnabled,
+                      onChanged: (v) {
+                        p.limitationAlertEnabled = v;
+                        p.notify();
+                      },
+                    ),
+                    const Divider(height: 16),
+                    _alertRow(
+                      icon: Icons.receipt_long_outlined,
+                      iconColor: AppTheme.warningColor,
+                      title: 'Invoice Overdue Alert',
+                      subtitle: 'Notify when client payment is overdue',
+                      value: p.invoiceOverdueAlert,
+                      onChanged: (v) {
+                        p.invoiceOverdueAlert = v;
+                        p.notify();
+                      },
+                    ),
+                    const Divider(height: 16),
+                    _alertRow(
+                      icon: Icons.timeline_outlined,
+                      iconColor: AppTheme.textSecondary,
+                      title: 'Case Stage Change Alert',
+                      subtitle:
+                          'Notify when case moves to next stage',
+                      value: p.caseStageChangeAlert,
+                      onChanged: (v) {
+                        p.caseStageChangeAlert = v;
+                        p.notify();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── SUMMARY BANNER ────────────────────────────────
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryColor.withAlpha(8),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: AppTheme.primaryColor.withAlpha(30)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.check_circle_outline,
+                            size: 16, color: AppTheme.primaryColor),
+                        SizedBox(width: 8),
+                        Text(
+                          'Ready to create case',
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.primaryColor),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Review your settings above, then tap '
+                      '"Create Case" below to save.',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+1. dotnet build (backend)
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. flutter analyze (Flutter)
+   → Must show: No issues found!
+
+3. Manual checklist:
+
+   Backend:
+   □ HangfireAuthorizationFilter — SuperAdmin only in production
+   □ IsDevelopment() check still allows local access
+
+   Flutter:
+   □ _Screen5 is StatefulWidget
+   □ _Screen6 is StatefulWidget
+   □ Screen5: 4 controllers, all disposed
+   □ Screen6: 2 controllers, all disposed
+   □ Both screens sync from provider in initState
+   □ Screen5: 5 fee type chips with correct behavior
+   □ Screen5: Fixed/Retainer shows agreed fee field
+   □ Screen5: Per Hearing shows per-hearing fee field
+   □ Screen5: Pro Bono/Contingency hides fee fields
+   □ Screen5: Advance cannot exceed agreed fee
+   □ Screen5: Balance due / fully paid summary card
+   □ Screen5: Payment details shown only when advance > 0
+   □ Screen5: Payment mode dropdown (Cash/UPI/Bank/Cheque/DD/Other)
+   □ Screen5: Payment date picker
+   □ Screen5: Vakalatnama switch with confirmation badge
+   □ Screen6: Private notes — 5 lines, privacy banner
+   □ Screen6: Client instructions — 4 lines
+   □ Screen6: Evening + morning hearing reminders
+   □ Screen6: WhatsApp client toggle synced with Screen 2
+   □ Screen6: Limitation alert, invoice overdue, stage change
+   □ Screen6: "Ready to create case" summary banner
+   □ Screen5 fee type chips clear irrelevant fields on change
+   □ FilteringTextInputFormatter.digitsOnly on all amount fields
+
+====================================================================
+DO NOT TOUCH
+====================================================================
+Backend:
+   - Any controller other than Program.cs
+   - Any migration files
+
+Flutter:
+   - _Screen1, _Screen2, _Screen3, _Screen4 — complete, do not touch
+   - _PlaceholderScreen — keep as is
+   - _AddCaseScreenState — navigation, progress bar, submit
+   - AddCaseProvider — do not touch
+   - Any other screen or provider file
+
+====================================================================
+END OF STEP 8
+====================================================================

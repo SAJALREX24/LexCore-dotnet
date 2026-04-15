@@ -20,10 +20,11 @@ public class TenantMiddleware
             var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             var roleClaim = context.User.FindFirst(ClaimTypes.Role)?.Value;
 
-            if (Guid.TryParse(firmIdClaim, out var firmId) && 
-                Guid.TryParse(userIdClaim, out var userId) &&
+            // firmId is optional — individual lawyers have no firm
+            if (Guid.TryParse(userIdClaim, out var userId) &&
                 !string.IsNullOrEmpty(roleClaim))
             {
+                Guid? firmId = Guid.TryParse(firmIdClaim, out var fId) ? fId : (Guid?)null;
                 tenantService.SetTenantContext(firmId, userId, roleClaim);
             }
         }

@@ -24,8 +24,8 @@ public class CreateInvoiceRequest
     [Required]
     public Guid CaseId { get; set; }
 
-    [Required]
-    public Guid ClientId { get; set; }
+    // Optional — only needed if client is a registered app user
+    public Guid? ClientId { get; set; }
 
     [Required]
     [Range(0.01, double.MaxValue)]
@@ -34,6 +34,27 @@ public class CreateInvoiceRequest
     public string? Description { get; set; }
     public string? LineItems { get; set; }
     public DateTime? DueDate { get; set; }
+    public decimal? GstAmount { get; set; }
+    public bool IsInterState { get; set; } = false;
+}
+
+public class UpdateInvoiceRequest
+{
+    [Range(0.01, double.MaxValue)]
+    public decimal? Amount { get; set; }
+    public decimal? GstAmount { get; set; }
+    public string? Description { get; set; }
+    public DateTime? DueDate { get; set; }
+    public string? LineItems { get; set; }
+    public bool? IsInterState { get; set; }
+}
+
+public class MarkPaidRequest
+{
+    public decimal? Amount { get; set; }
+    public string? PaymentMode { get; set; }
+    public string? TxnReference { get; set; }
+    public DateTime? PaymentDate { get; set; }
 }
 
 public class InvoiceDto
@@ -42,9 +63,9 @@ public class InvoiceDto
     public string InvoiceNumber { get; set; } = string.Empty;
     public Guid CaseId { get; set; }
     public string CaseTitle { get; set; } = string.Empty;
-    public Guid ClientId { get; set; }
+    public Guid? ClientId { get; set; }
     public string ClientName { get; set; } = string.Empty;
-    public string ClientEmail { get; set; } = string.Empty;
+    public string? ClientEmail { get; set; }
     public decimal Amount { get; set; }
     public decimal GstAmount { get; set; }
     public decimal TotalAmount { get; set; }
@@ -54,18 +75,34 @@ public class InvoiceDto
     public string? LineItems { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public bool IsInterState { get; set; }
+    public decimal PaidAmount { get; set; }
+    public decimal OutstandingAmount { get; set; }
+    public string? PaymentMode { get; set; }
+    public string? TxnReference { get; set; }
+    public DateTime? PaymentDate { get; set; }
+    public List<PaymentHistoryDto> PaymentHistory { get; set; } = new();
 }
 
 public class InvoiceListDto
 {
     public Guid Id { get; set; }
     public string InvoiceNumber { get; set; } = string.Empty;
+    public Guid CaseId { get; set; }
     public string CaseTitle { get; set; } = string.Empty;
     public string ClientName { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public decimal GstAmount { get; set; }
     public decimal TotalAmount { get; set; }
+    public decimal PaidAmount { get; set; }
+    public decimal OutstandingAmount { get; set; }
     public string Status { get; set; } = string.Empty;
     public DateTime? DueDate { get; set; }
     public DateTime CreatedAt { get; set; }
+    public string? PaymentMode { get; set; }
+    public string? TxnReference { get; set; }
+    public DateTime? PaymentDate { get; set; }
+    public bool IsInterState { get; set; }
 }
 
 public class InvoiceFilterRequest
@@ -106,4 +143,13 @@ public class RazorpayPaymentEntity
     public string Id { get; set; } = string.Empty;
     public int Amount { get; set; }
     public string Status { get; set; } = string.Empty;
+}
+
+public class PaymentHistoryDto
+{
+    public Guid Id { get; set; }
+    public decimal Amount { get; set; }
+    public string? PaymentMode { get; set; }
+    public string? TxnReference { get; set; }
+    public DateTime? PaidAt { get; set; }
 }

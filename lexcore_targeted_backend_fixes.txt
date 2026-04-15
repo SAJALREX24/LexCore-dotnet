@@ -1,0 +1,387 @@
+====================================================================
+LEXCORE AI — TARGETED BACKEND FIX PROMPT
+Analytics Solo Filter + OTP Brute Force + Exception Leak
+====================================================================
+
+YOU ARE A SENIOR .NET SECURITY ENGINEER.
+EXECUTE ALL FIXES IN ORDER.
+AFTER ALL FIXES: dotnet build → 0 errors, 0 warnings.
+
+====================================================================
+PROJECT PATH
+====================================================================
+C:\Users\Dell\Desktop\LexCore-dotnet\
+
+====================================================================
+FIX 1 — AnalyticsController: GetCasesAnalytics + GetHearingsAnalytics
+         Solo lawyer sees ALL solo lawyers' aggregate data (HIGH)
+====================================================================
+FILE: src\LexCore.API\Controllers\AnalyticsController.cs
+
+── FIX 1A — GetCasesAnalytics ──────────────────────────────────────
+
+FIND this exact method:
+    [HttpGet("cases")]
+    public async Task<ActionResult<ApiResponse<CasesAnalyticsDto>>> GetCasesAnalytics()
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var byStatus = await _context.Cases
+            .Where(c => firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null)
+            .GroupBy(c => c.Status)
+            .Select(g => new StatusBreakdown
+            {
+                Status = g.Key.ToString(),
+                Count = g.Count()
+            })
+            .ToListAsync();
+
+        var byType = await _context.Cases
+            .Where(c => (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null)
+                && c.CaseType != null)
+            .GroupBy(c => c.CaseType!)
+            .Select(g => new TypeBreakdown
+            {
+                Type = g.Key,
+                Count = g.Count()
+            })
+            .OrderByDescending(t => t.Count)
+            .Take(10)
+            .ToListAsync();
+
+        return Ok(ApiResponse<CasesAnalyticsDto>.SuccessResponse(new CasesAnalyticsDto
+        {
+            ByStatus = byStatus,
+            ByType = byType
+        }));
+    }
+
+REPLACE WITH:
+    [HttpGet("cases")]
+    public async Task<ActionResult<ApiResponse<CasesAnalyticsDto>>> GetCasesAnalytics()
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        var byStatus = await _context.Cases
+            .Where(c => firmId.HasValue
+                ? c.FirmId == firmId.Value
+                : c.FirmId == null &&
+                  c.CaseLawyers.Any(cl =>
+                      cl.LawyerId == userId &&
+                      cl.DeletedAt == null))
+            .GroupBy(c => c.Status)
+            .Select(g => new StatusBreakdown
+            {
+                Status = g.Key.ToString(),
+                Count = g.Count()
+            })
+            .ToListAsync();
+
+        var byType = await _context.Cases
+            .Where(c => (firmId.HasValue
+                    ? c.FirmId == firmId.Value
+                    : c.FirmId == null &&
+                      c.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null))
+                && c.CaseType != null)
+            .GroupBy(c => c.CaseType!)
+            .Select(g => new TypeBreakdown
+            {
+                Type = g.Key,
+                Count = g.Count()
+            })
+            .OrderByDescending(t => t.Count)
+            .Take(10)
+            .ToListAsync();
+
+        return Ok(ApiResponse<CasesAnalyticsDto>.SuccessResponse(new CasesAnalyticsDto
+        {
+            ByStatus = byStatus,
+            ByType = byType
+        }));
+    }
+
+── FIX 1B — GetHearingsAnalytics ───────────────────────────────────
+
+FIND inside GetHearingsAnalytics these three queries that are
+missing solo lawyer ownership checks:
+
+        var totalHearings = await _context.Hearings.CountAsync(h =>
+            firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null);
+        var completedHearings = await _context.Hearings.CountAsync(h =>
+            (firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null)
+            && h.Status == HearingStatus.Completed);
+        var pendingHearings = await _context.Hearings.CountAsync(h =>
+            (firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null)
+            && h.Status == HearingStatus.Scheduled
+            && h.HearingDate >= now);
+
+NOTE: Also check the monthlyData query at the top of the same
+method — if it also only uses h.FirmId == null with no
+CaseLawyers check, fix it the same way.
+
+For each query that has:
+    firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null
+
+REPLACE the solo part (h.FirmId == null) with:
+    h.FirmId == null &&
+    h.Case!.CaseLawyers.Any(cl =>
+        cl.LawyerId == userId &&
+        cl.DeletedAt == null)
+
+ADD at the top of GetHearingsAnalytics (after var firmId line):
+    var userId = _tenantService.GetCurrentUserId();
+
+AND add the Include for solo ownership to any Hearings queries
+that need to traverse CaseLawyers:
+    .Include(h => h.Case)
+        .ThenInclude(c => c!.CaseLawyers)
+
+====================================================================
+FIX 2 — AuthController: OTP Brute Force — no attempt limit (HIGH)
+====================================================================
+
+This fix has TWO parts:
+  Part A: Add OtpFailedAttempts field to User entity
+  Part B: Use it in VerifyOtp
+
+── FIX 2A — Add field to User entity ───────────────────────────────
+
+FILE: src\LexCore.Domain\Entities\User.cs
+
+FIND:
+    // Login brute force protection
+    public int FailedLoginAttempts { get; set; } = 0;
+    public DateTime? LockoutEnd { get; set; }
+
+REPLACE WITH:
+    // Login brute force protection
+    public int FailedLoginAttempts { get; set; } = 0;
+    public DateTime? LockoutEnd { get; set; }
+
+    // OTP brute force protection
+    public int OtpFailedAttempts { get; set; } = 0;
+    public DateTime? OtpLockoutEnd { get; set; }
+
+── FIX 2B — Create migration for new fields ────────────────────────
+
+Run these commands from the solution root:
+    cd src\LexCore.Infrastructure
+    dotnet ef migrations add AddOtpBruteForceProtection --startup-project ..\LexCore.API
+    dotnet ef database update --startup-project ..\LexCore.API
+
+── FIX 2C — Add OTP attempt limit in VerifyOtp ─────────────────────
+
+FILE: src\LexCore.API\Controllers\AuthController.cs
+
+FIND this exact method:
+    [HttpPost("verify-otp")]
+    public async Task<ActionResult<ApiResponse<object>>> VerifyOtp(
+        [FromBody] VerifyOtpRequest request)
+    {
+        var user = await _context.Users
+            .Where(u => u.Phone == request.Phone)
+            .OrderByDescending(u => u.PhoneOtpExpiry)
+            .FirstOrDefaultAsync();
+
+        if (user == null)
+            return NotFound(ApiResponse<object>.ErrorResponse(
+                "Phone number not found", "NOT_FOUND", 404));
+
+        if (user.PhoneOtp != request.Otp || user.PhoneOtpExpiry < DateTime.UtcNow)
+            return BadRequest(ApiResponse<object>.ErrorResponse(
+                "Invalid or expired OTP", "INVALID_OTP", 400));
+
+        user.IsPhoneVerified = true;
+        user.IsVerified = true;
+        user.PhoneOtp = null;
+        user.PhoneOtpExpiry = null;
+        await _context.SaveChangesAsync();
+
+        return Ok(ApiResponse<object>.SuccessResponse(null!, "Phone verified successfully"));
+    }
+
+REPLACE WITH:
+    [HttpPost("verify-otp")]
+    public async Task<ActionResult<ApiResponse<object>>> VerifyOtp(
+        [FromBody] VerifyOtpRequest request)
+    {
+        var user = await _context.Users
+            .Where(u => u.Phone == request.Phone)
+            .OrderByDescending(u => u.PhoneOtpExpiry)
+            .FirstOrDefaultAsync();
+
+        if (user == null)
+            return NotFound(ApiResponse<object>.ErrorResponse(
+                "Phone number not found", "NOT_FOUND", 404));
+
+        // Check OTP lockout — 5 failed attempts = 15 minute lockout
+        if (user.OtpLockoutEnd.HasValue && user.OtpLockoutEnd.Value > DateTime.UtcNow)
+        {
+            var remaining = (int)(user.OtpLockoutEnd.Value - DateTime.UtcNow).TotalMinutes + 1;
+            return BadRequest(ApiResponse<object>.ErrorResponse(
+                $"Too many failed attempts. Try again in {remaining} minute(s).",
+                "OTP_LOCKED", 400));
+        }
+
+        // Wrong OTP or expired
+        if (user.PhoneOtp != request.Otp || user.PhoneOtpExpiry < DateTime.UtcNow)
+        {
+            user.OtpFailedAttempts += 1;
+
+            if (user.OtpFailedAttempts >= 5)
+            {
+                user.OtpLockoutEnd = DateTime.UtcNow.AddMinutes(15);
+                user.OtpFailedAttempts = 0;
+                await _context.SaveChangesAsync();
+                return BadRequest(ApiResponse<object>.ErrorResponse(
+                    "Too many failed attempts. Please request a new OTP after 15 minutes.",
+                    "OTP_LOCKED", 400));
+            }
+
+            await _context.SaveChangesAsync();
+            return BadRequest(ApiResponse<object>.ErrorResponse(
+                $"Invalid or expired OTP. {5 - user.OtpFailedAttempts} attempt(s) remaining.",
+                "INVALID_OTP", 400));
+        }
+
+        // Correct OTP — reset counters
+        user.IsPhoneVerified = true;
+        user.IsVerified = true;
+        user.PhoneOtp = null;
+        user.PhoneOtpExpiry = null;
+        user.OtpFailedAttempts = 0;
+        user.OtpLockoutEnd = null;
+        await _context.SaveChangesAsync();
+
+        return Ok(ApiResponse<object>.SuccessResponse(null!, "Phone verified successfully"));
+    }
+
+── FIX 2D — Reset OTP counters when new OTP is sent ────────────────
+
+FILE: src\LexCore.API\Controllers\AuthController.cs
+
+FIND SendPhoneOtpInternalAsync method:
+    private async Task SendPhoneOtpInternalAsync(User user)
+    {
+        var otp = RandomNumberGenerator.GetInt32(100000, 1000000)
+            .ToString();
+        user.PhoneOtp = otp;
+        user.PhoneOtpExpiry = DateTime.UtcNow.AddMinutes(10);
+        await _context.SaveChangesAsync();
+
+        // TODO: Integrate with SMS provider (Twilio / MSG91 / Fast2SMS)
+    }
+
+REPLACE WITH:
+    private async Task SendPhoneOtpInternalAsync(User user)
+    {
+        var otp = RandomNumberGenerator.GetInt32(100000, 1000000)
+            .ToString();
+        user.PhoneOtp = otp;
+        user.PhoneOtpExpiry = DateTime.UtcNow.AddMinutes(10);
+        // Reset brute force counters on fresh OTP send
+        user.OtpFailedAttempts = 0;
+        user.OtpLockoutEnd = null;
+        await _context.SaveChangesAsync();
+
+        // TODO: Integrate with SMS provider (Twilio / MSG91 / Fast2SMS)
+    }
+
+====================================================================
+FIX 3 — ExceptionHandlerMiddleware: exception.Message leak (LOW)
+====================================================================
+FILE: src\LexCore.API\Middleware\ExceptionHandlerMiddleware.cs
+
+FIND:
+            KeyNotFoundException _ => new ApiResponse<object>
+            {
+                Success = false,
+                Message = exception.Message,
+                Code = "NOT_FOUND",
+                StatusCode = (int)HttpStatusCode.NotFound
+            },
+            ArgumentException _ => new ApiResponse<object>
+            {
+                Success = false,
+                Message = exception.Message,
+                Code = "BAD_REQUEST",
+                StatusCode = (int)HttpStatusCode.BadRequest
+            },
+            InvalidOperationException _ => new ApiResponse<object>
+            {
+                Success = false,
+                Message = exception.Message,
+                Code = "INVALID_OPERATION",
+                StatusCode = (int)HttpStatusCode.BadRequest
+            },
+
+REPLACE WITH:
+            KeyNotFoundException _ => new ApiResponse<object>
+            {
+                Success = false,
+                Message = "The requested record was not found.",
+                Code = "NOT_FOUND",
+                StatusCode = (int)HttpStatusCode.NotFound
+            },
+            ArgumentException _ => new ApiResponse<object>
+            {
+                Success = false,
+                Message = "Invalid request data.",
+                Code = "BAD_REQUEST",
+                StatusCode = (int)HttpStatusCode.BadRequest
+            },
+            InvalidOperationException _ => new ApiResponse<object>
+            {
+                Success = false,
+                Message = "This operation cannot be completed.",
+                Code = "INVALID_OPERATION",
+                StatusCode = (int)HttpStatusCode.BadRequest
+            },
+
+EXPLANATION:
+exception.Message can contain internal implementation details
+like table names, column names, entity IDs, or stack fragments
+from EF Core. These must never reach the client in production.
+The actual exception is already logged via _logger.LogError.
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+1. dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. dotnet ef database update --startup-project src\LexCore.API
+   → Must show: All migrations applied.
+
+3. Manual checklist:
+   □ Fix 1A: GetCasesAnalytics byStatus — has CaseLawyers.Any check
+   □ Fix 1A: GetCasesAnalytics byType  — has CaseLawyers.Any check
+   □ Fix 1B: GetHearingsAnalytics counts — have CaseLawyers.Any check
+   □ Fix 2A: User.cs has OtpFailedAttempts + OtpLockoutEnd fields
+   □ Fix 2B: Migration created and applied
+   □ Fix 2C: VerifyOtp checks OtpLockoutEnd before processing
+   □ Fix 2C: VerifyOtp increments OtpFailedAttempts on failure
+   □ Fix 2C: VerifyOtp locks after 5 failures for 15 minutes
+   □ Fix 2C: VerifyOtp resets counters on success
+   □ Fix 2C: Error message shows remaining attempts
+   □ Fix 2D: SendPhoneOtpInternalAsync resets counters on new OTP
+   □ Fix 3:  KeyNotFoundException returns generic message
+   □ Fix 3:  ArgumentException returns generic message
+   □ Fix 3:  InvalidOperationException returns generic message
+   □ Fix 3:  Logger still receives full exception (unchanged)
+
+====================================================================
+DO NOT TOUCH
+====================================================================
+- Login brute force (FailedLoginAttempts/LockoutEnd) — already correct
+- Any other controller
+- Any existing migration
+- Any Flutter file
+
+====================================================================
+END OF TARGETED BACKEND FIX
+====================================================================

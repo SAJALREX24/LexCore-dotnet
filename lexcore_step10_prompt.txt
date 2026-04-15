@@ -1,0 +1,442 @@
+====================================================================
+LEXCORE AI — STEP 10: AI SECURITY + OVERVIEW CONNECTIONS
+====================================================================
+
+YOU ARE AN EXPERT FLUTTER + .NET SECURITY ENGINEER.
+READ EVERY INSTRUCTION BEFORE TOUCHING A SINGLE LINE.
+EXECUTE PART A (BACKEND) FIRST, THEN PART B (FLUTTER).
+AFTER EACH PART: build/analyze → 0 errors.
+
+====================================================================
+ZERO-TOLERANCE REMINDER
+====================================================================
+Any provider added in future steps must implement clear() and be
+added to all 3 clear locations (logout, login, 401 interceptor).
+
+====================================================================
+CURRENT ISSUES BEING FIXED
+====================================================================
+
+ISSUE 1 — CRITICAL (Backend): No AI quota enforcement
+  AiController hits Anthropic API with zero usage limits.
+  A lawyer can send unlimited chat/draft/research requests,
+  burning unlimited API credits. AiUsageQuota entity exists
+  but has no counters and is never checked.
+
+ISSUE 2 — SAFE (Backend): SystemOverride field
+  ctx.SystemOverride ?? systemPrompt in AiOrchestrationService.
+  CONFIRMED SAFE — no controller ever sets SystemOverride from
+  user input. All 4 AiTaskContext instantiations hardcode fields
+  only. Field is internal scaffolding only.
+  ACTION: Remove the field entirely to eliminate future risk.
+
+ISSUE 3 — CRITICAL (Backend): No message length validation
+  ChatRequest.Message, DraftRequest.Instructions,
+  ResearchRequest.Query — no FluentValidation validators.
+  A lawyer can send a 1MB message to the AI endpoint,
+  burning massive tokens in one request.
+
+ISSUE 4 — MEDIUM (Flutter): Dashboard loads documents unnecessarily
+  _loadAll() loads documents for cases.first on every app open.
+  Documents are only needed when the user opens the Documents tab.
+  This is an unnecessary API call that slows app startup.
+
+====================================================================
+PART A — BACKEND FIXES
+====================================================================
+
+────────────────────────────────────────────────────────────────────
+FIX A1 — Add counters to AiUsageQuota entity
+────────────────────────────────────────────────────────────────────
+FILE: src\LexCore.Domain\Entities\AiUsageQuota.cs
+
+FIND:
+public class AiUsageQuota
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+    public string PlanTier { get; set; } = "basic";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+REPLACE WITH:
+public class AiUsageQuota
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+    public string PlanTier { get; set; } = "basic";
+
+    // Month-scoped counters — reset each calendar month
+    // MonthYear format: "2025-01", "2025-02", etc.
+    public string MonthYear { get; set; } = DateTime.UtcNow.ToString("yyyy-MM");
+    public int ChatCount { get; set; } = 0;
+    public int DraftCount { get; set; } = 0;
+    public int ResearchCount { get; set; } = 0;
+    public int TotalTokensUsed { get; set; } = 0;
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // Monthly limits per plan tier
+    public static (int chat, int draft, int research) GetLimits(string planTier) =>
+        planTier switch
+        {
+            "pro"        => (200, 100, 50),
+            "enterprise" => (500, 200, 100),
+            _            => (50,  20,  10)   // basic (default for solo lawyers)
+        };
+}
+
+────────────────────────────────────────────────────────────────────
+FIX A2 — Create migration for AiUsageQuota new fields
+────────────────────────────────────────────────────────────────────
+Run these commands from the solution root:
+    cd src\LexCore.Infrastructure
+    dotnet ef migrations add AddAiUsageQuotaCounters --startup-project ..\LexCore.API
+    dotnet ef database update --startup-project ..\LexCore.API
+
+────────────────────────────────────────────────────────────────────
+FIX A3 — Add quota enforcement to AiController
+────────────────────────────────────────────────────────────────────
+FILE: src\LexCore.API\Controllers\AiController.cs
+
+ADD this private helper method to AiController class,
+BEFORE the LogAuditAsync method:
+
+    /// Checks and increments quota for the given action.
+    /// Returns an error message if quota exceeded, null if allowed.
+    private async Task<string?> CheckAndIncrementQuotaAsync(
+        Guid userId, Guid? firmId, string action)
+    {
+        var tenantId = firmId ?? userId;
+        var monthYear = DateTime.UtcNow.ToString("yyyy-MM");
+
+        var quota = await _db.AiUsageQuotas
+            .FirstOrDefaultAsync(q =>
+                q.TenantId == tenantId &&
+                q.MonthYear == monthYear);
+
+        if (quota == null)
+        {
+            quota = new AiUsageQuota
+            {
+                TenantId = tenantId,
+                MonthYear = monthYear,
+                PlanTier = "basic"
+            };
+            _db.AiUsageQuotas.Add(quota);
+        }
+
+        var (chatLimit, draftLimit, researchLimit) =
+            AiUsageQuota.GetLimits(quota.PlanTier);
+
+        switch (action)
+        {
+            case "chat":
+                if (quota.ChatCount >= chatLimit)
+                    return $"Monthly AI chat limit reached ({chatLimit} messages). " +
+                           "Upgrade your plan for more.";
+                quota.ChatCount++;
+                break;
+            case "draft":
+                if (quota.DraftCount >= draftLimit)
+                    return $"Monthly AI draft limit reached ({draftLimit} drafts). " +
+                           "Upgrade your plan for more.";
+                quota.DraftCount++;
+                break;
+            case "research":
+                if (quota.ResearchCount >= researchLimit)
+                    return $"Monthly AI research limit reached ({researchLimit} queries). " +
+                           "Upgrade your plan for more.";
+                quota.ResearchCount++;
+                break;
+        }
+
+        quota.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return null; // allowed
+    }
+
+THEN add quota check at the START of each endpoint:
+
+In the Chat endpoint, FIND the first line after userId/firmId:
+        var userId = _tenant.GetCurrentUserId();
+        var firmId = _tenant.GetCurrentFirmId();
+        var sw = Stopwatch.StartNew();
+
+        // Validate legal query
+
+ADD after sw = Stopwatch.StartNew(); and BEFORE // Validate legal query:
+        // Quota check — prevents unlimited API usage
+        var quotaError = await CheckAndIncrementQuotaAsync(userId, firmId, "chat");
+        if (quotaError != null)
+            return StatusCode(429, ApiResponse<ChatResponse>.ErrorResponse(
+                quotaError, "QUOTA_EXCEEDED", 429));
+
+In the Draft endpoint, FIND:
+        var userId = _tenant.GetCurrentUserId();
+        var firmId = _tenant.GetCurrentFirmId();
+        var sw = Stopwatch.StartNew();
+
+        SmartExtract? extract = null;
+
+ADD after sw = Stopwatch.StartNew(); and BEFORE SmartExtract:
+        // Quota check
+        var quotaError = await CheckAndIncrementQuotaAsync(userId, firmId, "draft");
+        if (quotaError != null)
+            return StatusCode(429, ApiResponse<DraftResponse>.ErrorResponse(
+                quotaError, "QUOTA_EXCEEDED", 429));
+
+In the Research endpoint, FIND:
+        var userId = _tenant.GetCurrentUserId();
+        var firmId = _tenant.GetCurrentFirmId();
+        var sw = Stopwatch.StartNew();
+
+        // Check cache
+
+ADD after sw = Stopwatch.StartNew(); and BEFORE // Check cache:
+        // Quota check
+        var quotaError = await CheckAndIncrementQuotaAsync(userId, firmId, "research");
+        if (quotaError != null)
+            return StatusCode(429, ApiResponse<ResearchResponse>.ErrorResponse(
+                quotaError, "QUOTA_EXCEEDED", 429));
+
+────────────────────────────────────────────────────────────────────
+FIX A4 — Remove SystemOverride from AiTaskContext
+────────────────────────────────────────────────────────────────────
+FILE: src\LexCore.Application\Interfaces\IAiOrchestrationService.cs
+
+FIND:
+public class AiTaskContext
+{
+    public string Task { get; set; } = string.Empty;
+    public string UserMessage { get; set; } = string.Empty;
+    public string? SystemOverride { get; set; }
+    public List<AiMessage> History { get; set; } = new();
+    public string? ConversationSummary { get; set; }
+    public SmartExtract? SmartExtract { get; set; }
+    public string Language { get; set; } = "hi";
+}
+
+REPLACE WITH:
+public class AiTaskContext
+{
+    public string Task { get; set; } = string.Empty;
+    public string UserMessage { get; set; } = string.Empty;
+    // SystemOverride removed — system prompts are hardcoded constants only.
+    // No user-supplied data must ever reach the system prompt.
+    public List<AiMessage> History { get; set; } = new();
+    public string? ConversationSummary { get; set; }
+    public SmartExtract? SmartExtract { get; set; }
+    public string Language { get; set; } = "hi";
+}
+
+FILE: src\LexCore.Infrastructure\Services\AiOrchestrationService.cs
+
+FIND:
+            system = ctx.SystemOverride ?? systemPrompt,
+
+REPLACE WITH:
+            system = systemPrompt,
+
+────────────────────────────────────────────────────────────────────
+FIX A5 — Add FluentValidation for AI request DTOs
+────────────────────────────────────────────────────────────────────
+FILE: src\LexCore.Application\Validators\AiValidators.cs
+(CREATE this new file)
+
+using FluentValidation;
+
+namespace LexCore.Application.Validators;
+
+public class ChatRequestValidator : AbstractValidator<ChatRequest>
+{
+    public ChatRequestValidator()
+    {
+        RuleFor(x => x.Message)
+            .NotEmpty().WithMessage("Message is required")
+            .MaximumLength(2000).WithMessage(
+                "Message cannot exceed 2000 characters");
+
+        RuleFor(x => x.Language)
+            .Must(l => l == "hi" || l == "en" || l == "hinglish")
+            .When(x => !string.IsNullOrEmpty(x.Language))
+            .WithMessage("Language must be hi, en, or hinglish");
+    }
+}
+
+public class DraftRequestValidator : AbstractValidator<DraftRequest>
+{
+    private static readonly string[] AllowedTypes =
+    {
+        "Bail Application", "Legal Notice", "Vakalatnama",
+        "Affidavit", "Petition", "Reply", "Written Statement",
+        "Application", "Complaint", "Appeal", "Revision",
+        "Writ Petition", "Memorandum", "Agreement", "Power of Attorney"
+    };
+
+    public DraftRequestValidator()
+    {
+        RuleFor(x => x.DocumentType)
+            .NotEmpty().WithMessage("Document type is required")
+            .MaximumLength(100).WithMessage(
+                "Document type cannot exceed 100 characters");
+
+        RuleFor(x => x.Instructions)
+            .MaximumLength(1000).WithMessage(
+                "Instructions cannot exceed 1000 characters")
+            .When(x => x.Instructions != null);
+    }
+}
+
+public class ResearchRequestValidator : AbstractValidator<ResearchRequest>
+{
+    public ResearchRequestValidator()
+    {
+        RuleFor(x => x.Query)
+            .NotEmpty().WithMessage("Query is required")
+            .MaximumLength(1000).WithMessage(
+                "Query cannot exceed 1000 characters");
+
+        RuleFor(x => x.IpcSections)
+            .MaximumLength(500).WithMessage(
+                "IPC sections cannot exceed 500 characters")
+            .When(x => x.IpcSections != null);
+    }
+}
+
+ALSO: Register validators in ServiceCollectionExtensions.cs
+Find where other validators are registered (look for
+AssemblyScanner or AddValidatorsFromAssemblyContaining).
+The new validators will be picked up automatically if
+FluentValidation assembly scanning is already configured.
+If validators are registered individually, add:
+    services.AddScoped<IValidator<ChatRequest>, ChatRequestValidator>();
+    services.AddScoped<IValidator<DraftRequest>, DraftRequestValidator>();
+    services.AddScoped<IValidator<ResearchRequest>, ResearchRequestValidator>();
+
+────────────────────────────────────────────────────────────────────
+After all backend changes:
+    dotnet build → 0 errors, 0 warnings
+    dotnet ef database update
+────────────────────────────────────────────────────────────────────
+
+====================================================================
+PART B — FLUTTER FIXES
+====================================================================
+
+────────────────────────────────────────────────────────────────────
+FIX B1 — Remove unnecessary document load from dashboard
+────────────────────────────────────────────────────────────────────
+FILE: lib/screens/dashboard_screen.dart
+
+There are TWO locations that load documents unnecessarily.
+Fix both.
+
+FIND the first occurrence (in _loadAll method):
+      if (cases.cases.isNotEmpty && mounted) {
+        await docs.loadDocuments(cases.cases.first.id);
+      }
+
+DELETE those 3 lines entirely.
+
+FIND the second occurrence (in the HomeTab _loadAll or similar):
+      if (cases.cases.isNotEmpty && mounted) {
+        await docs.loadDocuments(cases.cases.first.id);
+      }
+
+DELETE those 3 lines entirely.
+
+ALSO: If docs variable is declared but now unused, remove:
+      final docs = context.read<DocumentsProvider>();
+from any _loadAll method where it is only used for that deleted block.
+
+EXPLANATION:
+Documents are case-specific — loading case[0]'s documents at
+app startup is wasteful and loads data the lawyer may never view.
+DocumentsProvider.loadDocuments() is called on demand when the
+lawyer navigates to the Documents tab for a specific case.
+
+────────────────────────────────────────────────────────────────────
+FIX B2 — Add quota exceeded error handling in AI providers
+────────────────────────────────────────────────────────────────────
+FILE: lib/providers/ai_chat_provider.dart
+
+FIND the catch block in sendMessage:
+    } catch (e) {
+      errorMessage = e.toString().replaceFirst('Exception: ', '');
+      messages.add(AiChatMessage(
+        role: 'assistant',
+        content: errorMessage!,
+        time: DateTime.now(),
+      ));
+    } finally {
+
+REPLACE WITH:
+    } catch (e) {
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      // Surface quota exceeded as a special non-error assistant message
+      final isQuota = msg.toLowerCase().contains('limit reached') ||
+          msg.toLowerCase().contains('quota');
+      errorMessage = msg;
+      messages.add(AiChatMessage(
+        role: 'assistant',
+        content: isQuota
+            ? '⚠️ $msg'
+            : msg,
+        isNonLegal: isQuota,
+        time: DateTime.now(),
+      ));
+    } finally {
+
+────────────────────────────────────────────────────────────────────
+After Flutter changes:
+    flutter analyze → No issues found!
+────────────────────────────────────────────────────────────────────
+
+====================================================================
+FINAL VERIFICATION CHECKLIST
+====================================================================
+
+Backend:
+  □ AiUsageQuota has MonthYear, ChatCount, DraftCount,
+    ResearchCount, TotalTokensUsed, UpdatedAt
+  □ AiUsageQuota.GetLimits() returns correct tier limits
+  □ Migration created and applied
+  □ CheckAndIncrementQuotaAsync private method added
+  □ Chat endpoint: quota checked, 429 returned if exceeded
+  □ Draft endpoint: quota checked, 429 returned if exceeded
+  □ Research endpoint: quota checked, 429 returned if exceeded
+  □ Quota auto-creates record for new users (first use)
+  □ Quota resets monthly (different MonthYear = new record)
+  □ SystemOverride field removed from AiTaskContext
+  □ AiOrchestrationService uses systemPrompt directly
+  □ ChatRequestValidator: Message max 2000 chars
+  □ DraftRequestValidator: DocumentType max 100, Instructions max 1000
+  □ ResearchRequestValidator: Query max 1000, IpcSections max 500
+  □ Validators registered in DI
+  □ dotnet build: 0 errors, 0 warnings
+
+Flutter:
+  □ Dashboard _loadAll: docs.loadDocuments removed (both occurrences)
+  □ docs variable removed if now unused
+  □ AiChatProvider: quota messages surfaced with ⚠️ prefix
+  □ flutter analyze: No issues found!
+
+====================================================================
+DO NOT TOUCH
+====================================================================
+Backend:
+  - AiController Chat/Draft/Research logic (only add quota check)
+  - AiOrchestrationService system prompts (only remove SystemOverride)
+  - Any existing migration files
+  - Any other controller
+
+Flutter:
+  - DocumentsProvider.loadDocuments() — keep as-is
+  - All provider clear() calls — already correct from Step 9
+  - All existing screens
+
+====================================================================
+END OF STEP 10
+====================================================================

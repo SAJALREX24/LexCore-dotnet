@@ -13,4 +13,13 @@ public class Hearing : TenantEntity
     public string? Notes { get; set; }
     public HearingStatus Status { get; set; } = HearingStatus.Scheduled;
     public bool ReminderSent { get; set; }
+
+    // Post-hearing outcome fields
+    public string? Outcome { get; set; }
+    public string? JudgeOrder { get; set; }
+    public DateTime? NextHearingDate { get; set; }
+    public TimeSpan? NextHearingTime { get; set; }
+    public string? ActionRequired { get; set; }
+    public bool UpdatedAfterHearing { get; set; } = false;
+    public DateTime? UpdatedAfterAt { get; set; }
 }

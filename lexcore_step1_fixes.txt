@@ -1,0 +1,124 @@
+====================================================================
+LEXCORE AI — STEP 1 FIXES (4 ISSUES)
+====================================================================
+
+CRITICAL RULES:
+1. Only fix exactly what is described below — nothing else
+2. Do NOT touch any other file
+3. After all fixes: dotnet build — must show 0 Error(s)
+4. Do NOT modify any existing migration file
+
+PROJECT PATH: C:\Users\Dell\Desktop\LexCore-dotnet\
+
+====================================================================
+FIX 1 — CaseStatus enum missing new values
+====================================================================
+
+FILE: src\LexCore.Domain\Enums\CaseStatus.cs
+
+REPLACE entire file content with exactly this:
+
+namespace LexCore.Domain.Enums;
+
+public enum CaseStatus
+{
+    Active = 1,
+    Closed = 2,
+    OnHold = 3,
+    Pending = 4,
+    Archived = 5,
+    HearingScheduled = 6,
+    Stayed = 7,
+    Withdrawn = 8,
+    Dismissed = 9
+}
+
+NOTE: Values 1-5 are unchanged — existing data is safe.
+Only 6,7,8,9 are new additions.
+
+After this change run:
+dotnet build
+
+Then run migration:
+dotnet ef migrations add AddCaseStatusExtended --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+dotnet ef database update --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+
+====================================================================
+FIX 2 — AgreedFees still editable via UpdateCaseRequest
+====================================================================
+
+FILE: src\LexCore.Application\DTOs\Cases\CaseDtos.cs
+
+In UpdateCaseRequest class ONLY — FIND and REMOVE this exact line:
+    public decimal? AgreedFees { get; set; }
+
+DO NOT remove AgreedFees from:
+- CreateCaseRequest (keep it — needed at creation)
+- CaseDto (keep it — needed for responses)
+
+---
+
+FILE: src\LexCore.API\Controllers\CasesController.cs
+
+In the UpdateCase method — FIND this line and REMOVE it if it exists:
+    if (request.AgreedFees.HasValue) caseEntity.AgreedFees = request.AgreedFees;
+
+This field must be immutable after case creation.
+TotalFee agreed with client can never be changed.
+
+dotnet build — fix any errors before continuing.
+
+====================================================================
+FIX 3 — HearingDate missing from Document entity
+====================================================================
+
+FILE: src\LexCore.Domain\Entities\Document.cs
+
+FIND this existing line:
+    public Guid? HearingId { get; set; }
+
+ADD this line immediately after it:
+    public DateTime? HearingDate { get; set; }  // denormalised hearing date for display without join
+
+This field stores the hearing date when a document is uploaded
+after a hearing — allows showing "Court Order · 15 Mar 2024"
+in the Documents tab without an extra database join.
+
+dotnet build
+
+Then run migration:
+dotnet ef migrations add AddHearingDateToDocument --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+dotnet ef database update --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+1. dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. Verify CaseStatus enum has 9 values (Active through Dismissed)
+
+3. Verify UpdateCaseRequest does NOT have AgreedFees property
+
+4. Verify Document entity has HearingDate DateTime? property
+
+====================================================================
+DO NOT TOUCH THESE — LEAVE EXACTLY AS IS
+====================================================================
+- AuthController
+- NotificationJobs
+- AI services
+- HearingsController
+- BillingController
+- StorageService
+- Any existing migration files
+- CORS policy
+- JWT configuration
+- DataSeeder
+- CreateCaseRequest (keep AgreedFees there)
+- CaseDto (keep AgreedFees there)
+
+====================================================================
+END OF STEP 1 FIXES
+====================================================================

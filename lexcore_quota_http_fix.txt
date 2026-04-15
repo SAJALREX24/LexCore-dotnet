@@ -1,0 +1,415 @@
+====================================================================
+LEXCORE AI — TARGETED FIX: QUOTA RACE CONDITION + HTTP + TOKENS
+====================================================================
+
+YOU ARE AN EXPERT .NET SECURITY ENGINEER.
+READ EVERY INSTRUCTION BEFORE TOUCHING A SINGLE LINE.
+EXECUTE ALL FIXES IN ORDER.
+AFTER ALL FIXES: dotnet build → 0 errors, 0 warnings.
+
+====================================================================
+PROJECT PATH
+====================================================================
+C:\Users\Dell\Desktop\LexCore-dotnet\
+
+====================================================================
+WHAT IS BEING FIXED AND WHY
+====================================================================
+
+FIX 1 — RACE CONDITION in quota enforcement (HIGH)
+  CheckAndIncrementQuotaAsync reads count, checks limit, increments.
+  If two requests arrive simultaneously (both read count=49),
+  both pass the check and both call Anthropic. At the limit
+  this allows 2x the permitted requests.
+  Fix: Replace read-check-increment with atomic SQL UPDATE
+  that only increments if still under the limit.
+
+FIX 2 — Missing composite unique index on AiUsageQuota (HIGH)
+  Currently only HasIndex(TenantId) — not unique per month.
+  Two concurrent first-requests in the same month could
+  both find quota==null and both INSERT a new record,
+  creating duplicate rows. Future queries may pick wrong row.
+  Fix: Add unique composite index on (TenantId, MonthYear).
+
+FIX 3 — TotalTokensUsed never updated (MEDIUM)
+  AiUsageQuota.TotalTokensUsed exists but stays 0 forever.
+  Tokens are tracked in AiAuditLog per-call but never
+  rolled up to the quota row. The field is useless as-is.
+  Fix: Update it in LogAuditAsync after each AI call.
+
+FIX 4 — HTTP-only server (CRITICAL for production)
+  builder.WebHost.UseUrls("http://0.0.0.0:5000")
+  JWT tokens travel unencrypted over local network.
+  Cloudflare tunnel handles TLS in dev — safe for now.
+  But the server must be hardened for production deployment.
+  Fix: Add ForwardedHeaders middleware (for reverse proxy)
+  and make the UseUrls environment-conditional.
+
+====================================================================
+FIX 1 — Replace quota race condition with atomic SQL UPDATE
+====================================================================
+FILE: src\LexCore.API\Controllers\AiController.cs
+
+FIND this entire method:
+    private async Task<string?> CheckAndIncrementQuotaAsync(
+        Guid userId, Guid? firmId, string action)
+    {
+        var tenantId = firmId ?? userId;
+        var monthYear = DateTime.UtcNow.ToString("yyyy-MM");
+
+        var quota = await _db.AiUsageQuotas
+            .FirstOrDefaultAsync(q =>
+                q.TenantId == tenantId &&
+                q.MonthYear == monthYear);
+
+        if (quota == null)
+        {
+            quota = new AiUsageQuota
+            {
+                TenantId = tenantId,
+                MonthYear = monthYear,
+                PlanTier = "basic"
+            };
+            _db.AiUsageQuotas.Add(quota);
+        }
+
+        var (chatLimit, draftLimit, researchLimit) =
+            AiUsageQuota.GetLimits(quota.PlanTier);
+
+        switch (action)
+        {
+            case "chat":
+                if (quota.ChatCount >= chatLimit)
+                    return $"Monthly AI chat limit reached ({chatLimit} messages). " +
+                           "Upgrade your plan for more.";
+                quota.ChatCount++;
+                break;
+            case "draft":
+                if (quota.DraftCount >= draftLimit)
+                    return $"Monthly AI draft limit reached ({draftLimit} drafts). " +
+                           "Upgrade your plan for more.";
+                quota.DraftCount++;
+                break;
+            case "research":
+                if (quota.ResearchCount >= researchLimit)
+                    return $"Monthly AI research limit reached ({researchLimit} queries). " +
+                           "Upgrade your plan for more.";
+                quota.ResearchCount++;
+                break;
+        }
+
+        quota.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return null; // allowed
+    }
+
+REPLACE WITH:
+    private async Task<string?> CheckAndIncrementQuotaAsync(
+        Guid userId, Guid? firmId, string action)
+    {
+        var tenantId = firmId ?? userId;
+        var monthYear = DateTime.UtcNow.ToString("yyyy-MM");
+
+        // Step 1: Ensure a quota row exists for this tenant+month.
+        // If two concurrent first-requests both find null, one INSERT will
+        // succeed and the other will hit the unique index constraint.
+        // The DbUpdateException catch handles that gracefully.
+        var existing = await _db.AiUsageQuotas
+            .FirstOrDefaultAsync(q =>
+                q.TenantId == tenantId &&
+                q.MonthYear == monthYear);
+
+        if (existing == null)
+        {
+            try
+            {
+                _db.AiUsageQuotas.Add(new AiUsageQuota
+                {
+                    TenantId = tenantId,
+                    MonthYear = monthYear,
+                    PlanTier = "basic"
+                });
+                await _db.SaveChangesAsync();
+            }
+            catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+            {
+                // Concurrent request already inserted — safe to continue.
+                _db.ChangeTracker.Clear();
+            }
+        }
+
+        // Step 2: Read current state with AsNoTracking (bypass EF cache).
+        var quota = await _db.AiUsageQuotas.AsNoTracking()
+            .FirstOrDefaultAsync(q =>
+                q.TenantId == tenantId &&
+                q.MonthYear == monthYear);
+
+        if (quota == null)
+            return "Quota record unavailable. Please try again.";
+
+        var (chatLimit, draftLimit, researchLimit) =
+            AiUsageQuota.GetLimits(quota.PlanTier);
+
+        // Step 3: Pre-check limit to avoid unnecessary DB write.
+        var limitError = action switch
+        {
+            "chat" when quota.ChatCount >= chatLimit =>
+                $"Monthly AI chat limit reached ({chatLimit} messages). " +
+                "Upgrade your plan for more.",
+            "draft" when quota.DraftCount >= draftLimit =>
+                $"Monthly AI draft limit reached ({draftLimit} drafts). " +
+                "Upgrade your plan for more.",
+            "research" when quota.ResearchCount >= researchLimit =>
+                $"Monthly AI research limit reached ({researchLimit} queries). " +
+                "Upgrade your plan for more.",
+            _ => null
+        };
+
+        if (limitError != null)
+            return limitError;
+
+        // Step 4: ATOMIC increment with WHERE guard — race-condition-safe.
+        // If another concurrent request consumed the last slot between
+        // our read (Step 2) and this update, rowsAffected will be 0.
+        var rowsAffected = action switch
+        {
+            "chat" => await _db.AiUsageQuotas
+                .Where(q =>
+                    q.TenantId == tenantId &&
+                    q.MonthYear == monthYear &&
+                    q.ChatCount < chatLimit)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(q => q.ChatCount, q => q.ChatCount + 1)
+                    .SetProperty(q => q.UpdatedAt, DateTime.UtcNow)),
+
+            "draft" => await _db.AiUsageQuotas
+                .Where(q =>
+                    q.TenantId == tenantId &&
+                    q.MonthYear == monthYear &&
+                    q.DraftCount < draftLimit)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(q => q.DraftCount, q => q.DraftCount + 1)
+                    .SetProperty(q => q.UpdatedAt, DateTime.UtcNow)),
+
+            "research" => await _db.AiUsageQuotas
+                .Where(q =>
+                    q.TenantId == tenantId &&
+                    q.MonthYear == monthYear &&
+                    q.ResearchCount < researchLimit)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(q => q.ResearchCount, q => q.ResearchCount + 1)
+                    .SetProperty(q => q.UpdatedAt, DateTime.UtcNow)),
+
+            _ => 0
+        };
+
+        // rowsAffected == 0 means the slot was taken by a concurrent request.
+        if (rowsAffected == 0)
+        {
+            return action switch
+            {
+                "chat" =>
+                    $"Monthly AI chat limit reached ({chatLimit} messages). " +
+                    "Upgrade your plan for more.",
+                "draft" =>
+                    $"Monthly AI draft limit reached ({draftLimit} drafts). " +
+                    "Upgrade your plan for more.",
+                "research" =>
+                    $"Monthly AI research limit reached ({researchLimit} queries). " +
+                    "Upgrade your plan for more.",
+                _ => "Quota limit reached."
+            };
+        }
+
+        return null; // slot reserved successfully
+    }
+
+====================================================================
+FIX 2 — Add composite unique index on AiUsageQuota
+====================================================================
+FILE: src\LexCore.Infrastructure\Data\AppDbContext.cs
+
+FIND:
+        modelBuilder.Entity<AiUsageQuota>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+        });
+
+REPLACE WITH:
+        modelBuilder.Entity<AiUsageQuota>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            // Unique composite index — one quota row per tenant per month.
+            // Prevents duplicate rows from concurrent first-time inserts
+            // and makes the DbUpdateException catch in CheckAndIncrement safe.
+            entity.HasIndex(e => new { e.TenantId, e.MonthYear })
+                  .IsUnique()
+                  .HasDatabaseName("IX_AiUsageQuota_TenantId_MonthYear");
+            entity.Property(e => e.MonthYear).HasMaxLength(7); // "yyyy-MM"
+        });
+
+THEN create and apply migration:
+    cd src\LexCore.Infrastructure
+    dotnet ef migrations add AddAiQuotaUniqueIndex --startup-project ..\LexCore.API
+    dotnet ef database update --startup-project ..\LexCore.API
+
+====================================================================
+FIX 3 — Update TotalTokensUsed in LogAuditAsync
+====================================================================
+FILE: src\LexCore.API\Controllers\AiController.cs
+
+FIND the entire LogAuditAsync method:
+    private async Task LogAuditAsync(Guid userId, Guid? firmId, string action, Guid? caseId,
+        int inputTokens, int outputTokens, string? model, int latencyMs, bool success)
+    {
+        _db.AiAuditLogs.Add(new AiAuditLog
+        {
+            TenantId = firmId ?? userId,
+            UserId = userId,
+            ActionType = action,
+            CaseId = caseId,
+            TokensInput = inputTokens,
+            TokensOutput = outputTokens,
+            ModelUsed = model,
+            LatencyMs = latencyMs,
+            Success = success,
+            IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString()
+        });
+        await _db.SaveChangesAsync();
+    }
+
+REPLACE WITH:
+    private async Task LogAuditAsync(Guid userId, Guid? firmId, string action, Guid? caseId,
+        int inputTokens, int outputTokens, string? model, int latencyMs, bool success)
+    {
+        _db.AiAuditLogs.Add(new AiAuditLog
+        {
+            TenantId = firmId ?? userId,
+            UserId = userId,
+            ActionType = action,
+            CaseId = caseId,
+            TokensInput = inputTokens,
+            TokensOutput = outputTokens,
+            ModelUsed = model,
+            LatencyMs = latencyMs,
+            Success = success,
+            IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString()
+        });
+        await _db.SaveChangesAsync();
+
+        // Roll up token usage to the quota row atomically.
+        // Skip cache hits and non-legal responses (0 tokens).
+        if (inputTokens + outputTokens > 0)
+        {
+            var tenantId = firmId ?? userId;
+            var monthYear = DateTime.UtcNow.ToString("yyyy-MM");
+            var totalTokens = inputTokens + outputTokens;
+
+            await _db.AiUsageQuotas
+                .Where(q =>
+                    q.TenantId == tenantId &&
+                    q.MonthYear == monthYear)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(q => q.TotalTokensUsed,
+                                 q => q.TotalTokensUsed + totalTokens)
+                    .SetProperty(q => q.UpdatedAt, DateTime.UtcNow));
+        }
+    }
+
+====================================================================
+FIX 4 — HTTP server hardening + ForwardedHeaders
+====================================================================
+FILE: src\LexCore.API\Program.cs
+
+── FIX 4A — Environment-conditional UseUrls ──────────────────────
+
+FIND:
+var builder = WebApplication.CreateBuilder(args);
+
+// Listen on all interfaces so physical devices on the same WiFi can connect
+builder.WebHost.UseUrls("http://0.0.0.0:5000");
+
+REPLACE WITH:
+var builder = WebApplication.CreateBuilder(args);
+
+// URL binding:
+// Development: 0.0.0.0 so Flutter on a physical device/emulator
+//              on the same WiFi reaches the backend directly.
+//              Cloudflare tunnel provides TLS — plain HTTP is acceptable.
+// Production:  localhost only. Nginx/reverse proxy handles TLS and
+//              forwards internally. JWTs never travel unencrypted
+//              on an external network.
+if (builder.Environment.IsDevelopment())
+{
+    builder.WebHost.UseUrls("http://0.0.0.0:5000");
+}
+else
+{
+    builder.WebHost.UseUrls("http://localhost:5000");
+}
+
+── FIX 4B — Add ForwardedHeaders middleware ──────────────────────
+
+FILE: src\LexCore.API\Program.cs
+
+FIND the first line of the middleware pipeline after var app = builder.Build():
+app.UseMiddleware<ExceptionHandlerMiddleware>();
+
+ADD these lines IMMEDIATELY BEFORE that line:
+// ForwardedHeaders: required when running behind Nginx/Cloudflare/any proxy.
+// Without this, the real client IP and HTTPS scheme are invisible to ASP.NET.
+// This affects: IP logging in audit trails, RemoteIpAddress in controllers.
+app.UseForwardedHeaders(new Microsoft.AspNetCore.HttpOverrides.ForwardedHeadersOptions
+{
+    ForwardedHeaders =
+        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
+        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+});
+
+app.UseMiddleware<ExceptionHandlerMiddleware>();
+
+NOTE: Microsoft.AspNetCore.HttpOverrides is part of the framework.
+No additional NuGet package is required.
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+1. dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. dotnet ef database update --startup-project src\LexCore.API
+   → Must show: All migrations applied.
+
+3. Manual checklist:
+   □ Fix 1: CheckAndIncrementQuotaAsync uses ExecuteUpdateAsync
+   □ Fix 1: WHERE clause has count < limit guard
+   □ Fix 1: rowsAffected == 0 returns correct limit error
+   □ Fix 1: DbUpdateException caught on first INSERT
+   □ Fix 1: AsNoTracking() used before atomic update
+   □ Fix 1: ChangeTracker.Clear() called on DbUpdateException
+   □ Fix 2: HasIndex(TenantId, MonthYear).IsUnique() in DbContext
+   □ Fix 2: MonthYear HasMaxLength(7) added
+   □ Fix 2: Migration AddAiQuotaUniqueIndex created and applied
+   □ Fix 3: LogAuditAsync updates TotalTokensUsed atomically
+   □ Fix 3: Only when inputTokens + outputTokens > 0
+   □ Fix 3: Uses ExecuteUpdateAsync (not SaveChanges)
+   □ Fix 4A: Development binds 0.0.0.0, Production binds localhost
+   □ Fix 4B: UseForwardedHeaders before ExceptionHandlerMiddleware
+   □ dotnet build: 0 errors, 0 warnings
+
+====================================================================
+DO NOT TOUCH
+====================================================================
+- AiUsageQuota.GetLimits() — already correct
+- The 3 quota pre-checks in Chat/Draft/Research — already correct
+- ChatRequestValidator, DraftRequestValidator, ResearchRequestValidator
+- SystemOverride removal — already done
+- Any Flutter file
+- Any other existing migration file
+
+====================================================================
+END OF TARGETED FIX PROMPT
+====================================================================

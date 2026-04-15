@@ -1,0 +1,446 @@
+====================================================================
+LEXCORE AI — STEP 3: BACKEND API FIXES & SCALABILITY
+====================================================================
+
+YOU ARE AN EXPERT .NET DEVELOPER WITH 20+ YEARS EXPERIENCE.
+READ EVERY INSTRUCTION CAREFULLY BEFORE WRITING A SINGLE LINE.
+
+====================================================================
+CRITICAL RULES
+====================================================================
+1. Only change exactly what is described — nothing else
+2. Do NOT rename any existing property, method, class, or route
+3. Do NOT touch StorageService, TokenService, NotificationJobs
+4. Do NOT touch AI services or AuthController
+5. After EVERY file change: dotnet build — fix errors before next
+6. Do NOT modify any existing migration file
+7. If unsure about anything — STOP. Do not guess.
+
+====================================================================
+PROJECT PATHS
+====================================================================
+Backend: C:\Users\Dell\Desktop\LexCore-dotnet\
+
+Migration command:
+dotnet ef migrations add <Name> --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+
+Update command:
+dotnet ef database update --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+
+====================================================================
+FIX 1 — SECURITY: HearingsController CreateHearing missing
+         solo lawyer ownership check
+====================================================================
+SEVERITY: HIGH — solo lawyer can create hearing on another
+solo lawyer's case if they know the CaseId
+
+FILE: src\LexCore.API\Controllers\HearingsController.cs
+
+FIND in CreateHearing method:
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var caseEntity = await _context.Cases.FirstOrDefaultAsync(c =>
+            c.Id == request.CaseId &&
+            (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
+        if (caseEntity == null)
+        {
+            return BadRequest(ApiResponse<HearingDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 400));
+        }
+
+REPLACE WITH:
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers must own the case via CaseLawyers
+        var caseEntity = await _context.Cases
+            .Include(c => c.CaseLawyers)
+            .FirstOrDefaultAsync(c =>
+                c.Id == request.CaseId &&
+                (firmId.HasValue
+                    ? c.FirmId == firmId.Value
+                    : c.FirmId == null &&
+                      c.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (caseEntity == null)
+        {
+            return BadRequest(ApiResponse<HearingDto>.ErrorResponse(
+                "Case not found", "CASE_NOT_FOUND", 400));
+        }
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 2 — SCALABILITY: CaseNotes unbounded query
+====================================================================
+SEVERITY: MEDIUM — a case with 500 notes returns all at once
+
+FILE: src\LexCore.API\Controllers\CasesController.cs
+
+FIND in GetCaseNotes method:
+        var notes = await _context.CaseNotes
+            .Include(n => n.Lawyer)
+            .Where(n => n.CaseId == id)
+            .OrderByDescending(n => n.CreatedAt)
+            .Select(n => new CaseNoteDto
+            {
+                Id = n.Id,
+                Note = n.Note,
+                NoteType = n.NoteType,
+                LawyerName = n.Lawyer != null ? n.Lawyer.Name : null,
+                CreatedAt = n.CreatedAt,
+            })
+            .ToListAsync();
+
+        return Ok(ApiResponse<List<CaseNoteDto>>.SuccessResponse(notes));
+
+REPLACE WITH:
+        var notes = await _context.CaseNotes
+            .Include(n => n.Lawyer)
+            .Where(n => n.CaseId == id)
+            .OrderByDescending(n => n.CreatedAt)
+            .Take(200)   // cap — a case with 200+ notes is unusual
+            .Select(n => new CaseNoteDto
+            {
+                Id = n.Id,
+                Note = n.Note,
+                NoteType = n.NoteType,
+                LawyerName = n.Lawyer != null ? n.Lawyer.Name : null,
+                CreatedAt = n.CreatedAt,
+            })
+            .ToListAsync();
+
+        return Ok(ApiResponse<List<CaseNoteDto>>.SuccessResponse(notes));
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 3 — SCALABILITY: Document version history unbounded
+====================================================================
+SEVERITY: LOW — a document with 50+ versions returns all at once
+Also: N+1 query inside Select for uploader name
+
+FILE: src\LexCore.API\Controllers\DocumentsController.cs
+
+FIND GetVersionHistory method's query:
+        var versions = await _context.DocumentVersions
+            .Where(v => v.DocumentId == id)
+            .OrderByDescending(v => v.VersionNumber)
+            .Select(v => new DocumentVersionDto
+            {
+                Id = v.Id,
+                VersionNumber = v.VersionNumber,
+                UploadedByName = _context.Users.Where(u => u.Id == v.UploadedBy).Select(u => u.Name).FirstOrDefault() ?? "",
+                UploadedAt = v.UploadedAt
+            })
+            .ToListAsync();
+
+REPLACE WITH:
+        var versions = await _context.DocumentVersions
+            .Include(v => v.Document)
+            .Where(v => v.DocumentId == id)
+            .OrderByDescending(v => v.VersionNumber)
+            .Take(50)   // documents rarely have more than 50 versions
+            .Join(_context.Users,
+                v => v.UploadedBy,
+                u => u.Id,
+                (v, u) => new DocumentVersionDto
+                {
+                    Id = v.Id,
+                    VersionNumber = v.VersionNumber,
+                    UploadedByName = u.Name,
+                    UploadedAt = v.UploadedAt
+                })
+            .ToListAsync();
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 4 — SECURITY: AnalyticsController TotalCases counts ALL
+         solo lawyer cases, not just the requesting lawyer's cases
+====================================================================
+SEVERITY: MEDIUM — solo lawyer A sees total case count that
+includes cases of solo lawyer B
+
+FILE: src\LexCore.API\Controllers\AnalyticsController.cs
+
+FIND in GetOverview:
+            TotalCases = await _context.Cases.CountAsync(c =>
+                firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null),
+            ActiveCases = await _context.Cases.CountAsync(c =>
+                (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null)
+                && c.Status == CaseStatus.Active),
+
+REPLACE WITH:
+            TotalCases = firmId.HasValue
+                ? await _context.Cases.CountAsync(c => c.FirmId == firmId.Value)
+                : await _context.Cases.CountAsync(c =>
+                    c.FirmId == null &&
+                    c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)),
+
+            ActiveCases = firmId.HasValue
+                ? await _context.Cases.CountAsync(c =>
+                    c.FirmId == firmId.Value && c.Status == CaseStatus.Active)
+                : await _context.Cases.CountAsync(c =>
+                    c.FirmId == null &&
+                    c.Status == CaseStatus.Active &&
+                    c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)),
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 5 — SCALABILITY: N+1 query in AnalyticsController
+         GetLawyerPerformance — _context.Hearings.Count() inside
+         a Select translates to one SQL query per lawyer
+====================================================================
+SEVERITY: MEDIUM — a firm with 20 lawyers fires 41+ SQL queries
+
+FILE: src\LexCore.API\Controllers\AnalyticsController.cs
+
+FIND the GetLawyerPerformance method's query:
+        var lawyers = await _context.Users
+            .Where(u => u.FirmId == firmId && u.Role == UserRole.Lawyer)
+            .Select(u => new LawyerPerformanceDto
+            {
+                LawyerId = u.Id,
+                Name = u.Name,
+                ActiveCases = u.CaseLawyers.Count(cl => cl.DeletedAt == null && cl.Case!.Status == CaseStatus.Active),
+                ClosedCases = u.CaseLawyers.Count(cl => cl.DeletedAt == null && cl.Case!.Status == CaseStatus.Closed),
+                TotalHearings = _context.Hearings.Count(h =>
+                    h.Case!.CaseLawyers.Any(cl => cl.LawyerId == u.Id && cl.DeletedAt == null) && h.FirmId == firmId),
+                UpcomingHearings = _context.Hearings.Count(h =>
+                    h.Case!.CaseLawyers.Any(cl => cl.LawyerId == u.Id && cl.DeletedAt == null) &&
+                    h.FirmId == firmId &&
+                    h.HearingDate >= now &&
+                    h.Status == HearingStatus.Scheduled)
+            })
+            .ToListAsync();
+
+REPLACE WITH:
+        // Fetch lawyers with navigation data — avoids N+1
+        var lawyerData = await _context.Users
+            .Where(u => u.FirmId == firmId && u.Role == UserRole.Lawyer)
+            .Include(u => u.CaseLawyers)
+                .ThenInclude(cl => cl.Case)
+            .ToListAsync();
+
+        // Fetch all hearing counts in two bulk queries — not N+1
+        var totalHearingCounts = await _context.Hearings
+            .Where(h => h.FirmId == firmId)
+            .GroupBy(h => h.Case!.CaseLawyers
+                .Where(cl => cl.DeletedAt == null)
+                .Select(cl => cl.LawyerId)
+                .FirstOrDefault())
+            .Select(g => new { LawyerId = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        var upcomingHearingCounts = await _context.Hearings
+            .Where(h => h.FirmId == firmId &&
+                        h.HearingDate >= now &&
+                        h.Status == HearingStatus.Scheduled)
+            .GroupBy(h => h.Case!.CaseLawyers
+                .Where(cl => cl.DeletedAt == null)
+                .Select(cl => cl.LawyerId)
+                .FirstOrDefault())
+            .Select(g => new { LawyerId = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        var lawyers = lawyerData.Select(u => new LawyerPerformanceDto
+        {
+            LawyerId = u.Id,
+            Name = u.Name,
+            ActiveCases = u.CaseLawyers.Count(cl =>
+                cl.DeletedAt == null && cl.Case?.Status == CaseStatus.Active),
+            ClosedCases = u.CaseLawyers.Count(cl =>
+                cl.DeletedAt == null && cl.Case?.Status == CaseStatus.Closed),
+            TotalHearings = totalHearingCounts
+                .FirstOrDefault(h => h.LawyerId == u.Id)?.Count ?? 0,
+            UpcomingHearings = upcomingHearingCounts
+                .FirstOrDefault(h => h.LawyerId == u.Id)?.Count ?? 0
+        }).ToList();
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 6 — SECURITY: CaseStatus model label and color missing
+         for new status values (HearingScheduled, Stayed,
+         Withdrawn, Dismissed) — backend response correct
+         but will break Flutter UI without this
+====================================================================
+
+This is a pre-emptive backend DTO fix so Flutter gets correct
+data when these statuses are used.
+
+FILE: src\LexCore.Application\DTOs\Cases\CaseDtos.cs
+
+In CaseDto class, the Status field is a string.
+The MapToCaseDto method in CasesController already uses
+c.Status.ToString() which will correctly return the enum name.
+
+VERIFY in CasesController.cs MapToCaseDto:
+    Status = c.Status.ToString(),
+
+If it returns the enum name like "HearingScheduled" — correct.
+If it returns a number — it needs fixing.
+
+Check the existing line and confirm it uses .ToString().
+No change needed if already using .ToString().
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 7 — SCALABILITY: Add missing composite index on Cases
+         for FirmId + Status — most common list query pattern
+====================================================================
+
+FILE: src\LexCore.Infrastructure\Data\AppDbContext.cs
+
+FIND in Case entity configuration:
+            entity.HasIndex(e => e.CourtType);
+            entity.HasIndex(e => new { e.Status, e.LimitationDate })
+
+ADD this line between them:
+            entity.HasIndex(e => new { e.FirmId, e.Status })
+                  .HasDatabaseName("IX_Cases_FirmId_Status");
+
+Then run migration:
+dotnet ef migrations add AddCaseFirmIdStatusIndex --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+dotnet ef database update --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 8 — SECURITY: Webhook endpoint has no signature
+         verification gap — check Razorpay webhook
+====================================================================
+
+FILE: src\LexCore.API\Controllers\BillingController.cs
+
+FIND the HandleWebhook method.
+Check if it validates the Razorpay webhook signature.
+Look for "X-Razorpay-Signature" header verification.
+
+If signature verification exists and returns 400 on mismatch
+→ already secure, no change needed.
+
+If NO signature verification exists:
+FIND the start of HandleWebhook:
+    [HttpPost("webhook")]
+    [AllowAnonymous]
+    public async Task<IActionResult> HandleWebhook()
+    {
+
+ADD at the very start of the method body:
+        // Verify Razorpay webhook signature
+        var razorpaySignature = Request.Headers["X-Razorpay-Signature"].FirstOrDefault();
+        if (string.IsNullOrEmpty(razorpaySignature))
+            return BadRequest(new { message = "Missing signature" });
+
+        string body;
+        using (var reader = new StreamReader(Request.Body))
+            body = await reader.ReadToEndAsync();
+
+        var webhookSecret = _configuration["Razorpay:WebhookSecret"] ?? string.Empty;
+        using var hmac = new System.Security.Cryptography.HMACSHA256(
+            System.Text.Encoding.UTF8.GetBytes(webhookSecret));
+        var expectedSig = Convert.ToHexString(
+            hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(body))).ToLower();
+
+        if (!string.Equals(razorpaySignature, expectedSig, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("Invalid Razorpay webhook signature");
+            return BadRequest(new { message = "Invalid signature" });
+        }
+
+Only add this if signature verification does not already exist.
+If it already exists — skip this fix entirely.
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 9 — SECURITY & SCALABILITY: CasesController GetCases
+         solo lawyer filter is applied AFTER main query
+         causing potential data exposure
+====================================================================
+
+FILE: src\LexCore.API\Controllers\CasesController.cs
+
+FIND in GetCases:
+        var query = firmId.HasValue
+            ? _context.Cases.Where(c => c.FirmId == firmId.Value).AsQueryable()
+            : _context.Cases.Where(c => c.FirmId == null &&
+                                        c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)).AsQueryable();
+
+        if (firmId.HasValue && role == UserRole.Lawyer.ToString())
+        {
+            query = query.Where(c => c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null));
+        }
+
+This is already correctly structured — verify it looks like this.
+If it does — no change needed. ✅
+If it does NOT have the inner CaseLawyers filter for firm lawyers
+— add it exactly as shown above.
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 10 — Add PATCH /api/cases/{id}/status to CaseModel
+          status label for new CaseStatus values
+====================================================================
+
+The CaseStatus enum now has 9 values but the Flutter CaseModel
+statusLabel getter only handles 5. This is a backend verification
+— ensure API returns string not integer.
+
+FILE: src\LexCore.API\Controllers\CasesController.cs
+
+FIND in MapToCaseDto:
+    Status = c.Status.ToString(),
+
+VERIFY this line exists exactly like this.
+If it says Status = (int)c.Status or Status = c.Status — fix it to:
+    Status = c.Status.ToString(),
+
+This ensures Flutter receives "HearingScheduled" not "6".
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+Run in this exact order:
+
+1. dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. dotnet ef database update --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+   → Must show: Done.
+
+3. Manual spot checks:
+   a. HearingsController CreateHearing — has userId + CaseLawyers.Any check ✓
+   b. CaseNotes — has .Take(200) ✓
+   c. DocumentVersions — has .Take(50) and Join instead of N+1 ✓
+   d. AnalyticsController TotalCases/ActiveCases — filters by userId for solo ✓
+   e. GetLawyerPerformance — no _context.Hearings.Count() inside Select ✓
+   f. AppDbContext — IX_Cases_FirmId_Status index present ✓
+   g. Status in MapToCaseDto — uses .ToString() ✓
+
+====================================================================
+WHAT NOT TO TOUCH
+====================================================================
+- AuthController — do not touch
+- StorageService — do not touch
+- TokenService — do not touch
+- NotificationJobs — do not touch
+- AI services — do not touch
+- BillingController invoice endpoints — do not touch
+- CORS policy — do not touch
+- JWT configuration — do not touch
+- DataSeeder — do not touch
+- Any existing migration files — do not modify
+
+====================================================================
+END OF STEP 3
+====================================================================

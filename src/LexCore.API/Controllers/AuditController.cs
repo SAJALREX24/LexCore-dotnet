@@ -26,10 +26,17 @@ public class AuditController : ControllerBase
     public async Task<ActionResult<PagedResponse<AuditLogDto>>> GetAuditLogs([FromQuery] AuditFilterRequest filter)
     {
         var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
 
-        var query = _context.AuditLogs
-            .Include(a => a.User)
-            .Where(a => a.FirmId == firmId);
+        // Security: solo lawyers (firmId=null) must only see their OWN audit logs
+        // Firm admins see all logs for their firm
+        var query = firmId.HasValue
+            ? _context.AuditLogs
+                .Include(a => a.User)
+                .Where(a => a.FirmId == firmId.Value)
+            : _context.AuditLogs
+                .Include(a => a.User)
+                .Where(a => a.FirmId == null && a.UserId == userId);
 
         if (filter.UserId.HasValue)
             query = query.Where(a => a.UserId == filter.UserId.Value);

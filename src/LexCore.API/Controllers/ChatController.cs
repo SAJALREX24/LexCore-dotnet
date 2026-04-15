@@ -34,7 +34,7 @@ public class ChatController : ControllerBase
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers)
             .Include(c => c.CaseClients)
-            .FirstOrDefaultAsync(c => c.Id == caseId && c.FirmId == firmId);
+            .FirstOrDefaultAsync(c => c.Id == caseId && (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
 
         if (caseEntity == null)
         {
@@ -96,7 +96,7 @@ public class ChatController : ControllerBase
         var caseEntity = await _context.Cases
             .Include(c => c.CaseLawyers)
             .Include(c => c.CaseClients)
-            .FirstOrDefaultAsync(c => c.Id == caseId && c.FirmId == firmId);
+            .FirstOrDefaultAsync(c => c.Id == caseId && (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
 
         if (caseEntity == null)
         {
@@ -115,7 +115,7 @@ public class ChatController : ControllerBase
 
         var query = _context.Chats
             .Include(c => c.Sender)
-            .Where(c => c.CaseId == caseId && c.FirmId == firmId);
+            .Where(c => c.CaseId == caseId && (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
 
         if (role == UserRole.Client.ToString())
         {

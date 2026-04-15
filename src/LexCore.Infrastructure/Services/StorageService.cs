@@ -165,4 +165,45 @@ public class StorageService : IStorageService
 
         return fileUrl;
     }
+
+    public async Task<string> GetSignedUrlAsync(string fileUrl, int expiryMinutes = 60)
+    {
+        if (fileUrl.StartsWith("local://"))
+        {
+            // For local storage — return a token-based URL
+            // The token encodes the path and expiry — verified in DownloadDocument endpoint
+            var relativePath = fileUrl.Replace("local://", "");
+            var expiry = DateTimeOffset.UtcNow.AddMinutes(expiryMinutes).ToUnixTimeSeconds();
+            // Simple HMAC token for local dev — not for production use
+            var tokenData = $"{relativePath}:{expiry}";
+            var secret = _configuration["Storage:LocalSigningSecret"] ?? "dev-secret-change-in-prod";
+            using var hmac = new System.Security.Cryptography.HMACSHA256(
+                System.Text.Encoding.UTF8.GetBytes(secret));
+            var hash = Convert.ToBase64String(
+                hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(tokenData)));
+            var safeHash = hash.Replace("+", "-").Replace("/", "_").Replace("=", "");
+            return $"/api/documents/serve?path={Uri.EscapeDataString(relativePath)}&exp={expiry}&sig={safeHash}";
+        }
+        else if (fileUrl.StartsWith("s3://"))
+        {
+            if (_s3Client == null)
+                throw new InvalidOperationException("S3 client not configured");
+
+            var path = fileUrl.Replace($"s3://{_bucketName}/", "");
+
+            var request = new Amazon.S3.Model.GetPreSignedUrlRequest
+            {
+                BucketName = _bucketName,
+                Key = path,
+                Expires = DateTime.UtcNow.AddMinutes(expiryMinutes),
+                Verb = Amazon.S3.HttpVerb.GET
+            };
+
+            // GetPreSignedURL is synchronous in AWSSDK — wrap in Task
+            var signedUrl = await Task.FromResult(_s3Client.GetPreSignedURL(request));
+            return signedUrl;
+        }
+
+        return fileUrl;
+    }
 }

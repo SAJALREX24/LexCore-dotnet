@@ -5,5 +5,10 @@ public enum CaseStatus
     Active = 1,
     Closed = 2,
     OnHold = 3,
-    Pending = 4
+    Pending = 4,
+    Archived = 5,
+    HearingScheduled = 6,
+    Stayed = 7,
+    Withdrawn = 8,
+    Dismissed = 9
 }

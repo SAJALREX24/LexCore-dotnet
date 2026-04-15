@@ -1,10 +1,7 @@
-using LexCore.Application.DTOs;
 using LexCore.Application.DTOs.Notifications;
 using LexCore.Application.Interfaces;
-using LexCore.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace LexCore.API.Controllers;
 
@@ -13,77 +10,82 @@ namespace LexCore.API.Controllers;
 [Authorize]
 public class NotificationsController : ControllerBase
 {
-    private readonly AppDbContext _context;
+    private readonly INotificationRepository _repo;
     private readonly ITenantService _tenantService;
 
-    public NotificationsController(AppDbContext context, ITenantService tenantService)
+    public NotificationsController(
+        INotificationRepository repo,
+        ITenantService tenantService)
     {
-        _context = context;
+        _repo = repo;
         _tenantService = tenantService;
     }
 
+    // GET /api/notifications?page=1&pageSize=20
+    // Returns paginated notifications for the logged-in lawyer
     [HttpGet]
-    public async Task<ActionResult<ApiResponse<List<NotificationDto>>>> GetNotifications([FromQuery] int page = 1, [FromQuery] int pageSize = 20, [FromQuery] bool unreadOnly = false)
+    public async Task<ActionResult<NotificationListResponse>> GetNotifications(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
-        var userId = _tenantService.GetCurrentUserId();
+        var lawyerId = _tenantService.GetCurrentUserId();
+        var notifications = await _repo.GetByLawyerAsync(lawyerId, page, pageSize);
+        var unreadCount = await _repo.GetUnreadCountAsync(lawyerId);
+        var totalCount = await _repo.GetTotalCountAsync(lawyerId);
 
-        var query = _context.Notifications
-            .Where(n => n.FirmId == firmId && n.UserId == userId);
-
-        if (unreadOnly)
+        var dtos = notifications.Select(n => new NotificationDto
         {
-            query = query.Where(n => !n.IsRead);
-        }
+            Id = n.Id,
+            Title = n.Title,
+            Body = n.Body,
+            Type = n.Type.ToString(),
+            Channel = n.Channel.ToString(),
+            DeliveryStatus = n.DeliveryStatus.ToString(),
+            IsRead = n.IsRead,
+            SentAt = n.SentAt,
+            CreatedAt = n.CreatedAt,
+            CaseId = n.CaseId,
+            CaseTitle = n.Case?.Title,
+            FailureReason = n.FailureReason
+        }).ToList();
 
-        var notifications = await query
-            .OrderByDescending(n => n.CreatedAt)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(n => new NotificationDto
-            {
-                Id = n.Id,
-                Title = n.Title,
-                Body = n.Body,
-                Type = n.Type.ToString(),
-                IsRead = n.IsRead,
-                CreatedAt = n.CreatedAt
-            })
-            .ToListAsync();
-
-        return Ok(ApiResponse<List<NotificationDto>>.SuccessResponse(notifications));
+        return Ok(new NotificationListResponse
+        {
+            Data = dtos,
+            Page = page,
+            PageSize = pageSize,
+            TotalCount = totalCount,
+            UnreadCount = unreadCount
+        });
     }
 
-    [HttpPatch("{id:guid}/read")]
-    public async Task<ActionResult<ApiResponse<object>>> MarkAsRead(Guid id)
+    // GET /api/notifications/unread-count
+    // Returns badge count — Flutter calls this on every app launch
+    [HttpGet("unread-count")]
+    public async Task<ActionResult<UnreadCountDto>> GetUnreadCount()
     {
-        var firmId = _tenantService.GetCurrentFirmId();
-        var userId = _tenantService.GetCurrentUserId();
-
-        var notification = await _context.Notifications
-            .FirstOrDefaultAsync(n => n.Id == id && n.FirmId == firmId && n.UserId == userId);
-
-        if (notification == null)
-        {
-            return NotFound(ApiResponse<object>.ErrorResponse("Notification not found", "NOT_FOUND", 404));
-        }
-
-        notification.IsRead = true;
-        await _context.SaveChangesAsync();
-
-        return Ok(ApiResponse<object>.SuccessResponse(null!, "Notification marked as read"));
+        var lawyerId = _tenantService.GetCurrentUserId();
+        var count = await _repo.GetUnreadCountAsync(lawyerId);
+        return Ok(new UnreadCountDto { Count = count });
     }
 
-    [HttpPatch("read-all")]
-    public async Task<ActionResult<ApiResponse<object>>> MarkAllAsRead()
+    // PUT /api/notifications/{id}/read
+    // Marks a single notification as read
+    [HttpPut("{id:guid}/read")]
+    public async Task<IActionResult> MarkAsRead(Guid id)
     {
-        var firmId = _tenantService.GetCurrentFirmId();
-        var userId = _tenantService.GetCurrentUserId();
+        var lawyerId = _tenantService.GetCurrentUserId();
+        await _repo.MarkAsReadAsync(id, lawyerId);
+        return NoContent();
+    }
 
-        await _context.Notifications
-            .Where(n => n.FirmId == firmId && n.UserId == userId && !n.IsRead)
-            .ExecuteUpdateAsync(s => s.SetProperty(n => n.IsRead, true));
-
-        return Ok(ApiResponse<object>.SuccessResponse(null!, "All notifications marked as read"));
+    // PUT /api/notifications/read-all
+    // Marks all notifications as read (bulk)
+    [HttpPut("read-all")]
+    public async Task<IActionResult> MarkAllAsRead()
+    {
+        var lawyerId = _tenantService.GetCurrentUserId();
+        await _repo.MarkAllAsReadAsync(lawyerId);
+        return NoContent();
     }
 }

@@ -28,6 +28,19 @@ public class UpdateHearingRequest
     public string? Notes { get; set; }
 }
 
+public class PostHearingUpdateRequest
+{
+    [Required]
+    [StringLength(50)]
+    public string Outcome { get; set; } = string.Empty;
+
+    public string? JudgeOrder { get; set; }
+    public DateTime? NextHearingDate { get; set; }
+    public TimeSpan? NextHearingTime { get; set; }
+    public string? ActionRequired { get; set; }
+    public bool CreateNextHearing { get; set; } = true;
+}
+
 public class UpdateHearingStatusRequest
 {
     [Required]
@@ -49,6 +62,13 @@ public class HearingDto
     public bool ReminderSent { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public string? Outcome { get; set; }
+    public string? JudgeOrder { get; set; }
+    public DateTime? NextHearingDate { get; set; }
+    public TimeSpan? NextHearingTime { get; set; }
+    public string? ActionRequired { get; set; }
+    public bool UpdatedAfterHearing { get; set; }
+    public DateTime? UpdatedAfterAt { get; set; }
 }
 
 public class HearingListDto

@@ -22,6 +22,343 @@ namespace LexCore.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("LexCore.Domain.Entities.AiAuditLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ActionType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("CaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("text");
+
+                    b.Property<string>("IpAddress")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("LatencyMs")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ModelUsed")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("Success")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TokensInput")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TokensOutput")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("UserId", "CreatedAt");
+
+                    b.ToTable("AiAuditLogs", (string)null);
+                });
+
+            modelBuilder.Entity("LexCore.Domain.Entities.AiConversation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ConversationType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Summary")
+                        .HasColumnType("text");
+
+                    b.Property<int>("SummaryTokenCount")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("text");
+
+                    b.Property<int>("TotalTokensUsed")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AiConversations", (string)null);
+                });
+
+            modelBuilder.Entity("LexCore.Domain.Entities.AiDraft", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DocumentType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("PrintReady")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("SmartExtractUsed")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("TokenCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AiDrafts", (string)null);
+                });
+
+            modelBuilder.Entity("LexCore.Domain.Entities.AiMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ContentLanguage")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsCompressed")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ModelUsed")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("TokenCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConversationId");
+
+                    b.ToTable("AiMessages", (string)null);
+                });
+
+            modelBuilder.Entity("LexCore.Domain.Entities.AiResearch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Citations")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsCached")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Query")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("QueryHash")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RelevantSections")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Result")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TokenCount")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AiResearches", (string)null);
+                });
+
+            modelBuilder.Entity("LexCore.Domain.Entities.AiResearchCache", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Citations")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("HitCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("LastAccessed")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("QueryHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("QueryNormalized")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Result")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("QueryHash")
+                        .IsUnique();
+
+                    b.ToTable("AiResearchCaches", (string)null);
+                });
+
+            modelBuilder.Entity("LexCore.Domain.Entities.AiUsageQuota", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ChatCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DraftCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("MonthYear")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("character varying(7)");
+
+                    b.Property<string>("PlanTier")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("ResearchCount")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TotalTokensUsed")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "MonthYear")
+                        .IsUnique()
+                        .HasDatabaseName("IX_AiUsageQuota_TenantId_MonthYear");
+
+                    b.ToTable("AiUsageQuotas", (string)null);
+                });
+
             modelBuilder.Entity("LexCore.Domain.Entities.AuditLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -73,7 +410,7 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("AuditLogs");
+                    b.ToTable("AuditLogs", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Case", b =>
@@ -82,19 +419,128 @@ namespace LexCore.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ActsAndSectionsJson")
+                        .HasMaxLength(20000)
+                        .HasColumnType("character varying(20000)");
+
+                    b.Property<decimal?>("AdvancePaid")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal?>("AgreedFees")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("AuthorisedRepresentative")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("AuthorisedRepresentativeDesignation")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("CaseBackground")
+                        .HasMaxLength(10000)
+                        .HasColumnType("character varying(10000)")
+                        .HasColumnName("Description");
+
+                    b.Property<string>("CaseNature")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("CaseNotesHtml")
+                        .HasMaxLength(10000)
+                        .HasColumnType("character varying(10000)");
+
                     b.Property<string>("CaseNumber")
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
-                    b.Property<string>("CaseType")
-                        .HasColumnType("text");
+                    b.Property<string>("CaseStage")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
-                    b.Property<string>("ClientVisibleNotes")
-                        .HasColumnType("text");
+                    b.Property<bool>("CaseStageChangeAlert")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("CaseType")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("CaseTypeCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("ClientAddress")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int?>("ClientAge")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ClientFatherName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("ClientIDDocumentType")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("ClientInstructions")
+                        .HasColumnType("text")
+                        .HasColumnName("ClientVisibleNotes");
+
+                    b.Property<string>("ClientInstructionsHtml")
+                        .HasMaxLength(5000)
+                        .HasColumnType("character varying(5000)");
+
+                    b.Property<string>("ClientName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("ClientPhone")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("ClientPosition")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("ClientType")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("ClientWhatsApp")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<bool>("ClientWhatsAppEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("CompanyCIN")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("CompanyGST")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("CompanyName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("CourtHierarchyName")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
 
                     b.Property<string>("CourtName")
-                        .HasColumnType("text");
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("CourtType")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -102,8 +548,20 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("Description")
-                        .HasColumnType("text");
+                    b.Property<string>("District")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("FIRDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FIRNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("FeeType")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("FiledDate")
                         .HasColumnType("timestamp with time zone");
@@ -111,8 +569,105 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<Guid?>("FirmId")
                         .HasColumnType("uuid");
 
-                    b.Property<string>("InternalNotes")
+                    b.Property<bool>("HearingReminderEvening")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("HearingReminderMorning")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("InvoiceOverdueAlert")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("LimitationAlertEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("LimitationAlertSent1")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("LimitationAlertSent30")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("LimitationAlertSent7")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("LimitationDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("NatureOfOffence")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<bool>("NotifyClientOnHearing")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("NotifyClientOnStatus")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("OppositeCounselCity")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("OppositeCounselEnrollment")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("OppositeCounselName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("OppositeCounselPhone")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("OppositePartiesJson")
+                        .HasMaxLength(20000)
+                        .HasColumnType("character varying(20000)");
+
+                    b.Property<string>("OppositeParty")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("OppositePartyLawyer")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("PSDistrict")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("PSState")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("PaymentMode")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("PaymentReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<decimal?>("PerHearingFee")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("PrivateNotes")
+                        .HasColumnType("text")
+                        .HasColumnName("InternalNotes");
+
+                    b.Property<string>("PrivateNotesHtml")
+                        .HasMaxLength(10000)
+                        .HasColumnType("character varying(10000)");
+
+                    b.Property<string>("ReliefSought")
                         .HasColumnType("text");
+
+                    b.Property<string>("SectionAct")
+                        .HasColumnType("text");
+
+                    b.Property<string>("StateUT")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
@@ -122,18 +677,33 @@ namespace LexCore.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<DateTime?>("TotalFeeLockedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("VakalatnamaSigned")
+                        .HasColumnType("boolean");
 
                     b.HasKey("Id");
 
                     b.HasIndex("CaseNumber");
 
+                    b.HasIndex("CourtType");
+
                     b.HasIndex("FirmId");
 
                     b.HasIndex("Status");
 
-                    b.ToTable("Cases");
+                    b.HasIndex("FirmId", "Status")
+                        .HasDatabaseName("IX_Cases_FirmId_Status");
+
+                    b.HasIndex("Status", "LimitationDate")
+                        .HasDatabaseName("IX_Cases_Status_LimitationDate")
+                        .HasFilter("\"LimitationDate\" IS NOT NULL");
+
+                    b.ToTable("Cases", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.CaseClient", b =>
@@ -167,7 +737,7 @@ namespace LexCore.Infrastructure.Migrations
                     b.HasIndex("CaseId", "ClientId")
                         .IsUnique();
 
-                    b.ToTable("CaseClients");
+                    b.ToTable("CaseClients", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.CaseLawyer", b =>
@@ -201,7 +771,47 @@ namespace LexCore.Infrastructure.Migrations
                     b.HasIndex("CaseId", "LawyerId")
                         .IsUnique();
 
-                    b.ToTable("CaseLawyers");
+                    b.ToTable("CaseLawyers", (string)null);
+                });
+
+            modelBuilder.Entity("LexCore.Domain.Entities.CaseNote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("LawyerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Note")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("NoteType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CaseId");
+
+                    b.HasIndex("LawyerId");
+
+                    b.ToTable("CaseNotes", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Chat", b =>
@@ -246,7 +856,7 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.HasIndex("SenderId");
 
-                    b.ToTable("Chats");
+                    b.ToTable("Chats", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Document", b =>
@@ -254,6 +864,13 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AIDraftId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AIDraftStatus")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<Guid>("CaseId")
                         .HasColumnType("uuid");
@@ -265,7 +882,20 @@ namespace LexCore.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Description")
-                        .HasColumnType("text");
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("DocumentCategory")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("DocumentSource")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("DocumentTag")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<string>("FileName")
                         .IsRequired()
@@ -282,14 +912,25 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<Guid?>("FirmId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("HearingDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("HearingId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsAIDraft")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("IsClientVisible")
                         .HasColumnType("boolean");
 
                     b.Property<string>("MimeType")
-                        .HasColumnType("text");
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<string>("Tags")
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -302,13 +943,16 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CaseId");
-
                     b.HasIndex("FirmId");
+
+                    b.HasIndex("HearingId");
 
                     b.HasIndex("UploadedBy");
 
-                    b.ToTable("Documents");
+                    b.HasIndex("CaseId", "DocumentCategory")
+                        .HasDatabaseName("IX_Documents_CaseId_Category");
+
+                    b.ToTable("Documents", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.DocumentVersion", b =>
@@ -346,7 +990,7 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.HasIndex("DocumentId");
 
-                    b.ToTable("DocumentVersions");
+                    b.ToTable("DocumentVersions", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Firm", b =>
@@ -397,7 +1041,7 @@ namespace LexCore.Infrastructure.Migrations
                     b.HasIndex("Slug")
                         .IsUnique();
 
-                    b.ToTable("Firms");
+                    b.ToTable("Firms", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Hearing", b =>
@@ -405,6 +1049,10 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<string>("ActionRequired")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
 
                     b.Property<Guid>("CaseId")
                         .HasColumnType("uuid");
@@ -430,14 +1078,34 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<string>("JudgeName")
                         .HasColumnType("text");
 
+                    b.Property<string>("JudgeOrder")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTime?>("NextHearingDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<TimeSpan?>("NextHearingTime")
+                        .HasColumnType("interval");
+
                     b.Property<string>("Notes")
                         .HasColumnType("text");
+
+                    b.Property<string>("Outcome")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<bool>("ReminderSent")
                         .HasColumnType("boolean");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAfterAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("UpdatedAfterHearing")
+                        .HasColumnType("boolean");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -448,11 +1116,12 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.HasIndex("FirmId");
 
-                    b.HasIndex("HearingDate");
+                    b.HasIndex("HearingDate")
+                        .HasDatabaseName("IX_Hearings_HearingDate");
 
                     b.HasIndex("Status");
 
-                    b.ToTable("Hearings");
+                    b.ToTable("Hearings", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Invoice", b =>
@@ -468,8 +1137,20 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<Guid>("CaseId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("ClientId")
+                    b.Property<string>("ClientEmail")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("ClientId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("ClientName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("ClientPhone")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -495,7 +1176,19 @@ namespace LexCore.Infrastructure.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
+                    b.Property<bool>("IsInterState")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("LineItems")
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("PaidAmount")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime?>("PaymentDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PaymentMode")
                         .HasColumnType("text");
 
                     b.Property<int>("Status")
@@ -504,6 +1197,9 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<decimal>("TotalAmount")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("TxnReference")
+                        .HasColumnType("text");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -518,9 +1214,14 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.HasIndex("FirmId");
 
+                    b.HasIndex("PaymentDate");
+
                     b.HasIndex("Status");
 
-                    b.ToTable("Invoices");
+                    b.HasIndex("InvoiceNumber", "FirmId")
+                        .IsUnique();
+
+                    b.ToTable("Invoices", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Notification", b =>
@@ -533,22 +1234,42 @@ namespace LexCore.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("CaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Channel")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("DeliveryStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("text");
+
                     b.Property<Guid?>("FirmId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("HearingId")
                         .HasColumnType("uuid");
 
                     b.Property<bool>("IsRead")
                         .HasColumnType("boolean");
 
+                    b.Property<Guid>("LawyerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("SentAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Title")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
+                        .HasColumnType("text");
 
                     b.Property<int>("Type")
                         .HasColumnType("integer");
@@ -556,16 +1277,26 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Guid>("UserId")
+                    b.Property<Guid?>("UserId")
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CaseId");
+
                     b.HasIndex("FirmId");
+
+                    b.HasIndex("HearingId");
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Notifications");
+                    b.HasIndex("LawyerId", "CreatedAt")
+                        .HasDatabaseName("IX_Notifications_LawyerId_CreatedAt");
+
+                    b.HasIndex("LawyerId", "IsRead")
+                        .HasDatabaseName("IX_Notifications_LawyerId_IsRead");
+
+                    b.ToTable("Notifications", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Payment", b =>
@@ -578,6 +1309,9 @@ namespace LexCore.Infrastructure.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<Guid?>("CaseId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -587,29 +1321,49 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<Guid?>("FirmId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("InvoiceId")
+                    b.Property<Guid?>("InvoiceId")
                         .HasColumnType("uuid");
+
+                    b.Property<bool>("IsAdvancePayment")
+                        .HasColumnType("boolean");
 
                     b.Property<DateTime?>("PaidAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("PaymentMode")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("PaymentType")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
                     b.Property<string>("RazorpayPaymentId")
                         .HasColumnType("text");
 
+                    b.Property<string>("ReferenceNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CaseId");
+
                     b.HasIndex("FirmId");
 
                     b.HasIndex("InvoiceId");
 
-                    b.ToTable("Payments");
+                    b.HasIndex("PaidAt");
+
+                    b.ToTable("Payments", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Subscription", b =>
@@ -649,7 +1403,7 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.HasIndex("FirmId");
 
-                    b.ToTable("Subscriptions");
+                    b.ToTable("Subscriptions", (string)null);
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.User", b =>
@@ -657,6 +1411,18 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<string>("BarEnrollmentNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("City")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("CourtType")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -669,6 +1435,12 @@ namespace LexCore.Infrastructure.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<int>("FailedLoginAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("FcmToken")
+                        .HasColumnType("text");
+
                     b.Property<Guid?>("FirmId")
                         .HasColumnType("uuid");
 
@@ -678,16 +1450,28 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<DateTime?>("InviteTokenExpiry")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("IsPhoneVerified")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("IsVerified")
                         .HasColumnType("boolean");
 
                     b.Property<DateTime?>("LastLogin")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTime?>("LockoutEnd")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<int>("OtpFailedAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("OtpLockoutEnd")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("PasswordHash")
                         .IsRequired()
@@ -699,6 +1483,16 @@ namespace LexCore.Infrastructure.Migrations
                     b.Property<DateTime?>("PasswordResetTokenExpiry")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Phone")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("PhoneOtp")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("PhoneOtpExpiry")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("RefreshToken")
                         .HasColumnType("text");
 
@@ -707,6 +1501,10 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.Property<int>("Role")
                         .HasColumnType("integer");
+
+                    b.Property<string>("State")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -724,7 +1522,20 @@ namespace LexCore.Infrastructure.Migrations
 
                     b.HasIndex("FirmId");
 
-                    b.ToTable("Users");
+                    b.HasIndex("Phone");
+
+                    b.ToTable("Users", (string)null);
+                });
+
+            modelBuilder.Entity("LexCore.Domain.Entities.AiMessage", b =>
+                {
+                    b.HasOne("LexCore.Domain.Entities.AiConversation", "Conversation")
+                        .WithMany("Messages")
+                        .HasForeignKey("ConversationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Conversation");
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.AuditLog", b =>
@@ -792,6 +1603,25 @@ namespace LexCore.Infrastructure.Migrations
                     b.Navigation("Lawyer");
                 });
 
+            modelBuilder.Entity("LexCore.Domain.Entities.CaseNote", b =>
+                {
+                    b.HasOne("LexCore.Domain.Entities.Case", "Case")
+                        .WithMany("CaseNotes")
+                        .HasForeignKey("CaseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("LexCore.Domain.Entities.User", "Lawyer")
+                        .WithMany()
+                        .HasForeignKey("LawyerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Case");
+
+                    b.Navigation("Lawyer");
+                });
+
             modelBuilder.Entity("LexCore.Domain.Entities.Chat", b =>
                 {
                     b.HasOne("LexCore.Domain.Entities.Case", "Case")
@@ -831,6 +1661,11 @@ namespace LexCore.Infrastructure.Migrations
                         .HasForeignKey("FirmId")
                         .OnDelete(DeleteBehavior.Cascade);
 
+                    b.HasOne("LexCore.Domain.Entities.Hearing", "Hearing")
+                        .WithMany()
+                        .HasForeignKey("HearingId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("LexCore.Domain.Entities.User", "Uploader")
                         .WithMany("UploadedDocuments")
                         .HasForeignKey("UploadedBy")
@@ -840,6 +1675,8 @@ namespace LexCore.Infrastructure.Migrations
                     b.Navigation("Case");
 
                     b.Navigation("Firm");
+
+                    b.Navigation("Hearing");
 
                     b.Navigation("Uploader");
                 });
@@ -884,8 +1721,7 @@ namespace LexCore.Infrastructure.Migrations
                     b.HasOne("LexCore.Domain.Entities.User", "Client")
                         .WithMany("ClientInvoices")
                         .HasForeignKey("ClientId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("LexCore.Domain.Entities.Firm", "Firm")
                         .WithMany("Invoices")
@@ -901,24 +1737,44 @@ namespace LexCore.Infrastructure.Migrations
 
             modelBuilder.Entity("LexCore.Domain.Entities.Notification", b =>
                 {
-                    b.HasOne("LexCore.Domain.Entities.Firm", "Firm")
-                        .WithMany("Notifications")
-                        .HasForeignKey("FirmId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                    b.HasOne("LexCore.Domain.Entities.Case", "Case")
+                        .WithMany()
+                        .HasForeignKey("CaseId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
-                    b.HasOne("LexCore.Domain.Entities.User", "User")
+                    b.HasOne("LexCore.Domain.Entities.Firm", null)
                         .WithMany("Notifications")
-                        .HasForeignKey("UserId")
+                        .HasForeignKey("FirmId");
+
+                    b.HasOne("LexCore.Domain.Entities.Hearing", "Hearing")
+                        .WithMany()
+                        .HasForeignKey("HearingId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("LexCore.Domain.Entities.User", "Lawyer")
+                        .WithMany()
+                        .HasForeignKey("LawyerId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Firm");
+                    b.HasOne("LexCore.Domain.Entities.User", null)
+                        .WithMany("Notifications")
+                        .HasForeignKey("UserId");
 
-                    b.Navigation("User");
+                    b.Navigation("Case");
+
+                    b.Navigation("Hearing");
+
+                    b.Navigation("Lawyer");
                 });
 
             modelBuilder.Entity("LexCore.Domain.Entities.Payment", b =>
                 {
+                    b.HasOne("LexCore.Domain.Entities.Case", "Case")
+                        .WithMany("AdvancePayments")
+                        .HasForeignKey("CaseId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("LexCore.Domain.Entities.Firm", "Firm")
                         .WithMany()
                         .HasForeignKey("FirmId")
@@ -927,8 +1783,9 @@ namespace LexCore.Infrastructure.Migrations
                     b.HasOne("LexCore.Domain.Entities.Invoice", "Invoice")
                         .WithMany("Payments")
                         .HasForeignKey("InvoiceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("Case");
 
                     b.Navigation("Firm");
 
@@ -955,11 +1812,20 @@ namespace LexCore.Infrastructure.Migrations
                     b.Navigation("Firm");
                 });
 
+            modelBuilder.Entity("LexCore.Domain.Entities.AiConversation", b =>
+                {
+                    b.Navigation("Messages");
+                });
+
             modelBuilder.Entity("LexCore.Domain.Entities.Case", b =>
                 {
+                    b.Navigation("AdvancePayments");
+
                     b.Navigation("CaseClients");
 
                     b.Navigation("CaseLawyers");
+
+                    b.Navigation("CaseNotes");
 
                     b.Navigation("Chats");
 

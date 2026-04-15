@@ -1,0 +1,140 @@
+====================================================================
+LEXCORE AI — STEP 13 BACKEND: AGREEDFE ES IMMUTABILITY GUARD
+====================================================================
+
+YOU ARE A 20+ YEARS EXPERIENCED ASP.NET CORE DEVELOPER AND
+SECURITY ENGINEER. READ THIS ENTIRE FILE BEFORE TOUCHING A SINGLE
+LINE OF CODE. EXECUTE EVERY TASK IN ORDER.
+
+====================================================================
+PROJECT CONTEXT
+====================================================================
+
+LexCore AI — Flutter + ASP.NET Core + PostgreSQL legal practice
+management app for Indian lawyers. This software handles legally
+privileged client data and financial records. Every decision must
+be made with the same care as production banking software.
+
+Backend project: C:\Users\Dell\Desktop\LexCore-dotnet\
+
+INVIOLABLE RULES:
+1. Never modify any file not explicitly mentioned in this prompt.
+2. Never add AgreedFees or AdvancePaid to UpdateCaseRequest — ever.
+3. Tenant isolation must be preserved on every query.
+4. After every change: dotnet build — zero errors allowed.
+
+====================================================================
+TASK 1 — AGREEDFE ES IMMUTABILITY GUARD IN UpdateCase
+====================================================================
+
+FILE: C:\Users\Dell\Desktop\LexCore-dotnet\src\LexCore.API\Controllers\CasesController.cs
+
+WHAT THE PROBLEM IS:
+AgreedFees is the total fee agreement between lawyer and client.
+It is set ONCE at case creation. TotalFeeLockedAt is set to
+DateTime.UtcNow at that moment and never changed. This is the
+lock signal. AgreedFees must NEVER be modified after creation —
+changing it retroactively would corrupt billing calculations,
+balance displays, and audit logs. This is a legal integrity
+requirement, not a preference.
+
+CURRENT STATE:
+UpdateCaseRequest intentionally has NO AgreedFees field. This is
+correct. The guard below makes this contract explicit in code so
+future developers cannot accidentally add the field and break
+fee immutability.
+
+CHANGE 1 — Add AgreedFees to the audit log in UpdateCase:
+
+FIND in the UpdateCase method:
+  var oldValues = JsonSerializer.Serialize(new { caseEntity.Title,
+      caseEntity.CaseBackground, caseEntity.CaseType,
+      caseEntity.CourtName });
+
+REPLACE WITH:
+  // AgreedFees immutability audit — explicitly records that
+  // AgreedFees was NOT changed by this update. This creates a
+  // paper trail in every UpdateCase audit log entry.
+  var oldValues = JsonSerializer.Serialize(new {
+      caseEntity.Title,
+      caseEntity.CaseBackground,
+      caseEntity.CaseType,
+      caseEntity.CourtName,
+      AgreedFeesImmutable = caseEntity.AgreedFees
+  });
+
+CHANGE 2 — Add immutability guard block at the top of UpdateCase:
+
+FIND the UpdateCase method body. After the null check
+  if (caseEntity == null) { return NotFound(...); }
+
+ADD immediately after it:
+
+  // SECURITY GUARD: AgreedFees immutability contract.
+  // AgreedFees is set once at case creation (TotalFeeLockedAt
+  // records when). It must never be modified via UpdateCase.
+  // UpdateCaseRequest intentionally has no AgreedFees field.
+  // This block is a defensive extension point — if AgreedFees
+  // is ever accidentally added to UpdateCaseRequest in a future
+  // refactor, add rejection logic here:
+  //   return Conflict(ApiResponse<CaseDto>.ErrorResponse(
+  //       "Fee agreement is locked and cannot be modified.",
+  //       "FEE_LOCKED", 409));
+  // For now: no-op guard that makes the contract explicit.
+  if (caseEntity.TotalFeeLockedAt.HasValue)
+  {
+      // Fee is locked. No action required today.
+      // This comment is load-bearing documentation.
+  }
+
+CHANGE 3 — Verify UpdateCaseRequest has NO AgreedFees or AdvancePaid:
+
+Search the UpdateCaseRequest class in:
+  C:\Users\Dell\Desktop\LexCore-dotnet\src\LexCore.Application\DTOs\Cases\CaseDtos.cs
+
+Confirm the class does NOT contain:
+  public decimal? AgreedFees { get; set; }
+  public decimal? AdvancePaid { get; set; }
+
+If either property is found — REMOVE IT IMMEDIATELY.
+These fields belong only in CreateCaseRequest. They have no
+place in UpdateCaseRequest under any circumstances.
+
+====================================================================
+TASK 2 — VERIFICATION CHECKLIST
+====================================================================
+
+[ ] dotnet build — zero errors, zero warnings.
+
+[ ] Verify audit log: After UpdateCase runs, the audit entry
+    for CASE_UPDATED must contain AgreedFeesImmutable in oldValues.
+
+[ ] Verify via Postman: PATCH /api/cases/{id} with body:
+    { "agreedFees": 999999 }
+    Response: 200 OK, case returned with original AgreedFees
+    unchanged (the field is silently ignored — this is correct).
+
+[ ] Verify UpdateCaseRequest class has no AgreedFees or AdvancePaid.
+
+====================================================================
+SECURITY NOTES
+====================================================================
+
+1. The immutability guard is a no-op today but a safety net
+   tomorrow. When a new developer joins and thinks "I'll just add
+   AgreedFees to UpdateCaseRequest", this comment block stops them
+   from doing it silently.
+
+2. AgreedFeesImmutable in the audit log creates a financial audit
+   trail. Every UpdateCase operation now records what the fee
+   agreement was at the time of the update, providing forensic
+   evidence that it was not tampered with.
+
+3. The Conflict(409) response template in the comment is
+   intentional — it gives the next developer the exact pattern
+   to use if they ever need to add an explicit rejection.
+
+====================================================================
+END OF STEP 13 BACKEND
+====================================================================
+Run dotnet build to confirm zero errors before switching to Flutter.

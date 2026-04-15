@@ -1,0 +1,94 @@
+====================================================================
+LEXCORE AI — STEP 2 FIXES (2 REMAINING ISSUES)
+====================================================================
+
+CRITICAL RULES:
+1. Only fix exactly what is described below — nothing else
+2. Do NOT touch any other file or method
+3. After both fixes: dotnet build — must show 0 Error(s)
+4. Do NOT modify any migration file
+
+PROJECT PATH: C:\Users\Dell\Desktop\LexCore-dotnet\
+
+====================================================================
+FIX A — CRITICAL: VerifyOtp logs full phone + OTP in plaintext
+====================================================================
+
+FILE: src\LexCore.API\Controllers\AuthController.cs
+
+FIND this exact block and DELETE it entirely (all 7 lines):
+
+        _logger.LogInformation(
+            "VerifyOtp: phone={Phone} foundUser={UserId} storedOtp={StoredOtp} submittedOtp={SubmittedOtp} expiry={Expiry}",
+            request.Phone,
+            user?.Id.ToString() ?? "NULL",
+            user?.PhoneOtp ?? "NULL",
+            request.Otp,
+            user?.PhoneOtpExpiry?.ToString() ?? "NULL");
+
+This logs the full phone number, the stored OTP, and the
+submitted OTP in plain text. Anyone with log access can
+steal OTPs for any user account. Delete the entire block.
+
+Do NOT change anything else in AuthController.
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX B — LOW: WhatsAppService logs full phone number
+====================================================================
+
+FILE: src\LexCore.Infrastructure\Services\WhatsAppService.cs
+
+FIND this exact line:
+                _logger.LogInformation("WhatsApp message sent successfully to {PhoneNumber}.", cleaned);
+
+REPLACE WITH:
+                var maskedWa = cleaned.Length >= 4 ? "****" + cleaned[^4..] : "****";
+                _logger.LogInformation("WhatsApp message sent successfully to {PhoneNumber}.", maskedWa);
+
+FIND this exact block:
+                _logger.LogWarning("WhatsApp send failed for {PhoneNumber}. Status: {StatusCode}",
+                    cleaned, (int)response.StatusCode);
+
+REPLACE WITH:
+                var maskedWaWarn = cleaned.Length >= 4 ? "****" + cleaned[^4..] : "****";
+                _logger.LogWarning("WhatsApp send failed for {PhoneNumber}. Status: {StatusCode}",
+                    maskedWaWarn, (int)response.StatusCode);
+
+Note: Use maskedWaWarn (different variable name) for the
+second block to avoid duplicate variable declaration in
+the same scope.
+
+Do NOT change anything else in WhatsAppService.
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+1. dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. Verify in AuthController — search for "storedOtp" or
+   "submittedOtp" — should return NO results.
+
+3. Verify in WhatsAppService — search for "{PhoneNumber}"
+   log lines — should use maskedWa/maskedWaWarn not "cleaned".
+
+====================================================================
+DO NOT TOUCH THESE
+====================================================================
+- Any other log line in any file
+- NotificationService (already fixed in Step 2)
+- Any migration files
+- TokenService
+- StorageService
+- Program.cs
+- Any validator
+- Any controller other than AuthController
+
+====================================================================
+END OF STEP 2 FIXES
+====================================================================

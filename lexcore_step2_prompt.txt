@@ -1,0 +1,553 @@
+====================================================================
+LEXCORE AI — STEP 2: BACKEND SECURITY & SCALABILITY FIXES
+====================================================================
+
+YOU ARE AN EXPERT .NET DEVELOPER WITH 20+ YEARS EXPERIENCE.
+READ EVERY INSTRUCTION CAREFULLY BEFORE WRITING A SINGLE LINE.
+
+====================================================================
+CRITICAL RULES
+====================================================================
+1. Only change exactly what is described — nothing else
+2. Do NOT rename any existing property, method, class, or route
+3. Do NOT touch AuthController register/logout/OTP verify methods
+4. Do NOT touch NotificationJobs, AI services, HearingsController
+5. After EVERY file change: dotnet build — fix errors before next
+6. Do NOT modify any existing migration file
+7. If unsure — STOP and ask. Do not guess.
+
+====================================================================
+PROJECT PATHS
+====================================================================
+Backend:  C:\Users\Dell\Desktop\LexCore-dotnet\
+Domain:   src\LexCore.Domain\
+App:      src\LexCore.Application\
+Infra:    src\LexCore.Infrastructure\
+API:      src\LexCore.API\
+
+Migration command:
+dotnet ef migrations add <Name> --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+
+Update command:
+dotnet ef database update --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+
+====================================================================
+FIX 1 — REMOVE OTP FROM LOGS (1 line delete)
+====================================================================
+SEVERITY: CRITICAL — OTP in logs = anyone with log access
+can impersonate any user
+
+FILE: src\LexCore.API\Controllers\AuthController.cs
+
+FIND this exact line and DELETE it entirely:
+    _logger.LogInformation("OTP for {Phone}: {Otp}", user.Phone, otp);
+
+This is the only change in this file for FIX 1.
+Do not touch anything else in AuthController.
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 2 — MASK PHONE NUMBER IN WHATSAPP LOGS
+====================================================================
+SEVERITY: MEDIUM — client phone numbers must never appear in logs
+
+FILE: src\LexCore.Infrastructure\Services\NotificationService.cs
+
+FIND:
+    _logger.LogInformation("WhatsApp notification dispatched to {Number}.", whatsAppNumber);
+
+REPLACE WITH:
+    // Log only last 4 digits — never log full phone number
+    var maskedNumber = whatsAppNumber.Length >= 4
+        ? "****" + whatsAppNumber[^4..]
+        : "****";
+    _logger.LogInformation("WhatsApp notification dispatched to {Number}.", maskedNumber);
+
+FIND:
+    _logger.LogError(ex, "Failed to send WhatsApp notification to {Number}.", whatsAppNumber);
+
+REPLACE WITH:
+    var maskedNumber = whatsAppNumber.Length >= 4
+        ? "****" + whatsAppNumber[^4..]
+        : "****";
+    _logger.LogError(ex, "Failed to send WhatsApp notification to {Number}.", maskedNumber);
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 3 — ADD LOGIN BRUTE FORCE PROTECTION
+====================================================================
+SEVERITY: HIGH — without this, unlimited password attempts allowed
+
+STEP A — Add lockout fields to User entity.
+
+FILE: src\LexCore.Domain\Entities\User.cs
+
+FIND this existing line:
+    public string? FcmToken { get; set; }
+
+ADD these lines immediately after it:
+    // Login brute force protection
+    public int FailedLoginAttempts { get; set; } = 0;
+    public DateTime? LockoutEnd { get; set; }
+
+dotnet build — fix errors before continuing.
+
+STEP B — Run migration for new fields.
+
+dotnet ef migrations add AddLoginLockoutToUser --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+dotnet ef database update --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+
+STEP C — Add lockout logic to Login method.
+
+FILE: src\LexCore.API\Controllers\AuthController.cs
+
+FIND the Login method. It starts with:
+    [HttpPost("login")]
+    public async Task<ActionResult<ApiResponse<AuthResponse>>> Login(
+        [FromBody] LoginRequest request)
+    {
+        var user = await _context.Users
+            .Include(u => u.Firm)
+            .FirstOrDefaultAsync(u => u.Email == request.Email);
+
+        if (user == null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+            return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
+                "Invalid email or password", "INVALID_CREDENTIALS", 401));
+
+REPLACE with:
+    [HttpPost("login")]
+    public async Task<ActionResult<ApiResponse<AuthResponse>>> Login(
+        [FromBody] LoginRequest request)
+    {
+        var user = await _context.Users
+            .Include(u => u.Firm)
+            .FirstOrDefaultAsync(u => u.Email == request.Email);
+
+        // Generic delay to prevent timing attacks
+        if (user == null)
+        {
+            await Task.Delay(200);
+            return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
+                "Invalid email or password", "INVALID_CREDENTIALS", 401));
+        }
+
+        // Check if account is locked out
+        if (user.LockoutEnd.HasValue && user.LockoutEnd.Value > DateTime.UtcNow)
+        {
+            var remaining = (int)(user.LockoutEnd.Value - DateTime.UtcNow).TotalMinutes + 1;
+            return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
+                $"Account locked. Try again in {remaining} minute(s).",
+                "ACCOUNT_LOCKED", 401));
+        }
+
+        // Verify password
+        if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+        {
+            // Increment failed attempts
+            user.FailedLoginAttempts += 1;
+
+            // Lock after 5 failed attempts — 15 minute lockout
+            if (user.FailedLoginAttempts >= 5)
+            {
+                user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
+                user.FailedLoginAttempts = 0;
+                await _context.SaveChangesAsync();
+                return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
+                    "Too many failed attempts. Account locked for 15 minutes.",
+                    "ACCOUNT_LOCKED", 401));
+            }
+
+            await _context.SaveChangesAsync();
+            return Unauthorized(ApiResponse<AuthResponse>.ErrorResponse(
+                "Invalid email or password", "INVALID_CREDENTIALS", 401));
+        }
+
+        // Successful login — reset failed attempts and lockout
+        user.FailedLoginAttempts = 0;
+        user.LockoutEnd = null;
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 4 — REDUCE JWT ACCESS TOKEN FROM 7 DAYS TO 24 HOURS
+====================================================================
+SEVERITY: HIGH — stolen token valid for 7 days is too long
+for a legal app with sensitive client data
+
+FILE: src\LexCore.Infrastructure\Services\TokenService.cs
+
+FIND:
+        var token = new JwtSecurityToken(
+            issuer: _configuration["Jwt:Issuer"],
+            audience: _configuration["Jwt:Audience"],
+            claims: claims,
+            expires: DateTime.UtcNow.AddDays(7),
+            signingCredentials: credentials
+        );
+
+REPLACE WITH:
+        var token = new JwtSecurityToken(
+            issuer: _configuration["Jwt:Issuer"],
+            audience: _configuration["Jwt:Audience"],
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(24),  // 24 hours — use refresh token after
+            signingCredentials: credentials
+        );
+
+FILE: src\LexCore.API\Controllers\AuthController.cs
+
+There are multiple places where ExpiresAt is set to AddDays(7).
+Find ALL occurrences of:
+    ExpiresAt = DateTime.UtcNow.AddDays(7),
+
+REPLACE each with:
+    ExpiresAt = DateTime.UtcNow.AddHours(24),
+
+NOTE: RefreshTokenExpiry stays at AddDays(7) — that is correct.
+Only the AccessToken expiry changes to 24 hours.
+Only change lines inside AuthResponse objects — not RefreshTokenExpiry.
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 5 — STORAGE SERVICE — REPLACE PUBLIC URLs WITH SIGNED URLS
+====================================================================
+SEVERITY: CRITICAL — permanent public S3 URLs expose confidential
+legal documents to anyone who obtains the URL
+
+STEP A — Update IStorageService interface.
+
+FILE: src\LexCore.Application\Interfaces\IStorageService.cs
+
+REPLACE entire file with:
+namespace LexCore.Application.Interfaces;
+
+public interface IStorageService
+{
+    Task<string> UploadFileAsync(Stream fileStream, string fileName, string contentType, string folder);
+    Task<Stream?> DownloadFileAsync(string fileUrl);
+    Task<bool> DeleteFileAsync(string fileUrl);
+    string GetPublicUrl(string fileUrl);                        // keep — used for non-sensitive files
+    Task<string> GetSignedUrlAsync(string fileUrl, int expiryMinutes = 60); // NEW — for documents
+}
+
+dotnet build — fix errors before continuing.
+
+STEP B — Implement GetSignedUrlAsync in StorageService.
+
+FILE: src\LexCore.Infrastructure\Services\StorageService.cs
+
+FIND the closing brace of the GetPublicUrl method:
+        return fileUrl;
+    }
+}
+
+REPLACE the entire closing part with:
+        return fileUrl;
+    }
+
+    public async Task<string> GetSignedUrlAsync(string fileUrl, int expiryMinutes = 60)
+    {
+        if (fileUrl.StartsWith("local://"))
+        {
+            // For local storage — return a token-based URL
+            // The token encodes the path and expiry — verified in DownloadDocument endpoint
+            var relativePath = fileUrl.Replace("local://", "");
+            var expiry = DateTimeOffset.UtcNow.AddMinutes(expiryMinutes).ToUnixTimeSeconds();
+            // Simple HMAC token for local dev — not for production use
+            var tokenData = $"{relativePath}:{expiry}";
+            var secret = _configuration["Storage:LocalSigningSecret"] ?? "dev-secret-change-in-prod";
+            using var hmac = new System.Security.Cryptography.HMACSHA256(
+                System.Text.Encoding.UTF8.GetBytes(secret));
+            var hash = Convert.ToBase64String(
+                hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(tokenData)));
+            var safeHash = hash.Replace("+", "-").Replace("/", "_").Replace("=", "");
+            return $"/api/documents/serve?path={Uri.EscapeDataString(relativePath)}&exp={expiry}&sig={safeHash}";
+        }
+        else if (fileUrl.StartsWith("s3://"))
+        {
+            if (_s3Client == null)
+                throw new InvalidOperationException("S3 client not configured");
+
+            var path = fileUrl.Replace($"s3://{_bucketName}/", "");
+
+            var request = new Amazon.S3.Model.GetPreSignedUrlRequest
+            {
+                BucketName = _bucketName,
+                Key = path,
+                Expires = DateTime.UtcNow.AddMinutes(expiryMinutes),
+                Verb = Amazon.S3.HttpVerb.GET
+            };
+
+            // GetPreSignedURL is synchronous in AWSSDK — wrap in Task
+            var signedUrl = await Task.FromResult(_s3Client.GetPreSignedURL(request));
+            return signedUrl;
+        }
+
+        return fileUrl;
+    }
+}
+
+dotnet build — fix errors before continuing.
+
+STEP C — Update DocumentsController DownloadDocument to use signed URL.
+
+FILE: src\LexCore.API\Controllers\DocumentsController.cs
+
+FIND the DownloadDocument method:
+    [HttpGet("{id:guid}/download")]
+    public async Task<IActionResult> DownloadDocument(Guid id)
+
+Inside this method, FIND where the file is returned:
+        var stream = await _storageService.DownloadFileAsync(document.FileUrl);
+        if (stream == null)
+        {
+            return NotFound(new { success = false, message = "File not found", code = "FILE_NOT_FOUND" });
+        }
+
+        return File(stream, document.MimeType ?? "application/octet-stream", document.FileName);
+
+REPLACE WITH:
+        // For S3 — redirect to signed URL (no data proxied through API)
+        if (document.FileUrl.StartsWith("s3://"))
+        {
+            var signedUrl = await _storageService.GetSignedUrlAsync(document.FileUrl, 60);
+            return Redirect(signedUrl);
+        }
+
+        // For local storage — stream directly (development only)
+        var stream = await _storageService.DownloadFileAsync(document.FileUrl);
+        if (stream == null)
+        {
+            return NotFound(new { success = false, message = "File not found", code = "FILE_NOT_FOUND" });
+        }
+
+        return File(stream, document.MimeType ?? "application/octet-stream", document.FileName);
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 6 — REMOVE STATIC FILES SERVING FOR UPLOADS
+====================================================================
+SEVERITY: CRITICAL — UseStaticFiles() serves /uploads folder
+without authentication — any file URL is publicly accessible
+
+FILE: src\LexCore.API\Program.cs
+
+FIND:
+// Serve local files
+app.UseStaticFiles();
+
+REPLACE WITH:
+// NOTE: Static files deliberately NOT served for /uploads
+// All document access goes through authenticated /api/documents/{id}/download
+// which enforces ownership checks before serving files.
+// UseStaticFiles() removed to prevent unauthenticated file access.
+//
+// If you need to serve other static assets (images, icons etc.),
+// use a separate wwwroot folder and configure explicitly:
+// app.UseStaticFiles(new StaticFileOptions { RequestPath = "/assets" });
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 7 — ADD PAGINATION TO DOCUMENT LIST
+====================================================================
+SEVERITY: MEDIUM — unbounded list returns all documents at once
+A case with 200+ documents would OOM on a 4GB RAM device
+
+FILE: src\LexCore.API\Controllers\DocumentsController.cs
+
+FIND the GetCaseDocuments method signature:
+    public async Task<ActionResult<ApiResponse<List<DocumentDto>>>> GetCaseDocuments(
+        Guid caseId, [FromQuery] string? category = null)
+
+REPLACE WITH:
+    public async Task<ActionResult<ApiResponse<List<DocumentDto>>>> GetCaseDocuments(
+        Guid caseId,
+        [FromQuery] string? category = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
+    {
+        // Cap page size — never return more than 100 at once
+        if (pageSize > 100) pageSize = 100;
+        if (page < 1) page = 1;
+
+THEN find the final query inside GetCaseDocuments:
+        var documents = await query
+            .OrderByDescending(d => d.CreatedAt)
+            .Select(d => new DocumentDto
+            {
+
+ADD Skip/Take before the Select:
+        var totalCount = await query.CountAsync();
+
+        var documents = await query
+            .OrderByDescending(d => d.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(d => new DocumentDto
+            {
+
+AND update the return statement at the end of GetCaseDocuments:
+FIND:
+        return Ok(ApiResponse<List<DocumentDto>>.SuccessResponse(documents));
+
+REPLACE WITH:
+        return Ok(new
+        {
+            success = true,
+            data = documents,
+            page = page,
+            pageSize = pageSize,
+            totalCount = totalCount,
+            totalPages = (int)Math.Ceiling((double)totalCount / pageSize)
+        });
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FIX 8 — STRENGTHEN CreateCaseRequestValidator
+====================================================================
+SEVERITY: MEDIUM — phone format, fee logic not validated server-side
+
+FILE: src\LexCore.Application\Validators\CaseValidators.cs
+
+FIND the CreateCaseRequestValidator class:
+public class CreateCaseRequestValidator : AbstractValidator<CreateCaseRequest>
+{
+    public CreateCaseRequestValidator()
+    {
+        RuleFor(x => x.Title)
+            .NotEmpty().WithMessage("Case title is required")
+            .MaximumLength(500).WithMessage("Title cannot exceed 500 characters");
+
+        RuleFor(x => x.CaseType)
+            .MaximumLength(100).When(x => !string.IsNullOrEmpty(x.CaseType))
+            .WithMessage("Case type cannot exceed 100 characters");
+
+        RuleFor(x => x.CourtName)
+            .MaximumLength(200).When(x => !string.IsNullOrEmpty(x.CourtName))
+            .WithMessage("Court name cannot exceed 200 characters");
+    }
+}
+
+REPLACE WITH:
+public class CreateCaseRequestValidator : AbstractValidator<CreateCaseRequest>
+{
+    public CreateCaseRequestValidator()
+    {
+        // ── Core ────────────────────────────────────────────────
+        RuleFor(x => x.Title)
+            .NotEmpty().WithMessage("Case title is required")
+            .MaximumLength(500).WithMessage("Title cannot exceed 500 characters");
+
+        RuleFor(x => x.CaseType)
+            .MaximumLength(100).When(x => !string.IsNullOrEmpty(x.CaseType))
+            .WithMessage("Case type cannot exceed 100 characters");
+
+        RuleFor(x => x.CourtName)
+            .MaximumLength(200).When(x => !string.IsNullOrEmpty(x.CourtName))
+            .WithMessage("Court name cannot exceed 200 characters");
+
+        // ── Client phone — 10-digit Indian mobile ───────────────
+        RuleFor(x => x.ClientPhone)
+            .Matches(@"^[6-9]\d{9}$")
+            .When(x => !string.IsNullOrEmpty(x.ClientPhone))
+            .WithMessage("Client phone must be a valid 10-digit Indian mobile number starting with 6-9");
+
+        RuleFor(x => x.ClientWhatsApp)
+            .Matches(@"^[6-9]\d{9}$")
+            .When(x => !string.IsNullOrEmpty(x.ClientWhatsApp))
+            .WithMessage("WhatsApp number must be a valid 10-digit Indian mobile number starting with 6-9");
+
+        // ── Client age ──────────────────────────────────────────
+        RuleFor(x => x.ClientAge)
+            .InclusiveBetween(1, 120)
+            .When(x => x.ClientAge.HasValue)
+            .WithMessage("Client age must be between 1 and 120");
+
+        // ── Fee validation ──────────────────────────────────────
+        RuleFor(x => x.AgreedFees)
+            .GreaterThan(0)
+            .When(x => x.AgreedFees.HasValue)
+            .WithMessage("Total fee must be greater than zero");
+
+        RuleFor(x => x.AdvancePaid)
+            .GreaterThanOrEqualTo(0)
+            .When(x => x.AdvancePaid.HasValue)
+            .WithMessage("Advance paid cannot be negative");
+
+        RuleFor(x => x.AdvancePaid)
+            .Must((request, advance) => advance <= request.AgreedFees)
+            .When(x => x.AdvancePaid.HasValue && x.AgreedFees.HasValue)
+            .WithMessage("Advance paid cannot exceed total agreed fees");
+
+        // ── Date validation ─────────────────────────────────────
+        RuleFor(x => x.LimitationDate)
+            .GreaterThan(x => x.FiledDate!.Value)
+            .When(x => x.LimitationDate.HasValue && x.FiledDate.HasValue)
+            .WithMessage("Limitation date must be after filing date");
+
+        // ── Counsel phone ───────────────────────────────────────
+        RuleFor(x => x.OppositeCounselPhone)
+            .Matches(@"^[6-9]\d{9}$")
+            .When(x => !string.IsNullOrEmpty(x.OppositeCounselPhone))
+            .WithMessage("Counsel phone must be a valid 10-digit Indian mobile number starting with 6-9");
+
+        // ── String length limits ────────────────────────────────
+        RuleFor(x => x.ClientName)
+            .MaximumLength(200).When(x => !string.IsNullOrEmpty(x.ClientName));
+
+        RuleFor(x => x.ClientAddress)
+            .MaximumLength(1000).When(x => !string.IsNullOrEmpty(x.ClientAddress));
+
+        RuleFor(x => x.NatureOfOffence)
+            .MaximumLength(500).When(x => !string.IsNullOrEmpty(x.NatureOfOffence));
+
+        RuleFor(x => x.OppositeCounselName)
+            .MaximumLength(200).When(x => !string.IsNullOrEmpty(x.OppositeCounselName));
+    }
+}
+
+dotnet build — fix errors before continuing.
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+Run in this exact order:
+
+1. dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. dotnet ef database update --project src\LexCore.Infrastructure --startup-project src\LexCore.API
+   → Must show: Done.
+
+3. Manual checks:
+   a. AuthController — search for "OTP" in log lines — should be GONE
+   b. TokenService — verify expires: AddHours(24) not AddDays(7)
+   c. AuthController Login — verify lockout logic present
+   d. IStorageService — verify GetSignedUrlAsync method present
+   e. StorageService — verify GetSignedUrlAsync implementation present
+   f. Program.cs — verify UseStaticFiles() is commented out
+   g. CreateCaseRequestValidator — verify phone regex present
+
+====================================================================
+WHAT NOT TO TOUCH
+====================================================================
+- AuthController Register, Logout, VerifyOtp, ForgotPassword methods
+- NotificationJobs
+- AI services (AiController, AiOrchestrationService)
+- HearingsController
+- BillingController
+- Any existing migration files
+- CORS policy
+- RefreshTokenExpiry (stays at 7 days — that is correct)
+- DataSeeder
+
+====================================================================
+END OF STEP 2
+====================================================================

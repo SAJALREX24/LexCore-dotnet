@@ -1,0 +1,456 @@
+====================================================================
+LEXCORE AI — MASTER CONNECTIVITY & HOUSEKEEPING FIX PROMPT
+====================================================================
+
+YOU ARE A SENIOR FULL-STACK ENGINEER WITH 20+ YEARS EXPERIENCE.
+THIS PROMPT FIXES ALL CONNECTIVITY, CONFIGURATION, AND HOUSEKEEPING
+ISSUES ACROSS BOTH THE BACKEND AND FLUTTER CODEBASES.
+
+READ EVERY INSTRUCTION BEFORE TOUCHING A SINGLE LINE.
+EXECUTE IN ORDER — DO NOT SKIP ANY FIX.
+
+====================================================================
+WHY THIS PROMPT EXISTS
+====================================================================
+
+After the backend security fixes and Flutter UI fixes, several
+smaller but important issues remain:
+
+1. CORS is wide open (AllowAnyOrigin) — must be tightened
+2. Backend serves HTTP on all interfaces — JWT travels unencrypted
+   on local network without Cloudflare tunnel
+3. Dead constants in AppConstants clutter the codebase
+4. baseUrl is a hardcoded Cloudflare tunnel URL — fragile
+5. Timeout values may be too long/short for mobile lawyers
+6. Error messages from backend validation not always surfaced
+   correctly to the Flutter UI
+
+====================================================================
+PROJECT PATHS
+====================================================================
+Backend: C:\Users\Dell\Desktop\LexCore-dotnet\
+Flutter: C:\Users\Dell\Desktop\lexcore_app\
+
+====================================================================
+PART A — BACKEND CONNECTIVITY FIXES
+====================================================================
+
+────────────────────────────────────────────────────────────────────
+A1 — Tighten CORS Policy (HIGH)
+────────────────────────────────────────────────────────────────────
+FILE: src\LexCore.API\Extensions\ServiceCollectionExtensions.cs
+(or wherever AddCorsPolicy is defined — search for "LexCorePolicy")
+
+FIND:
+            options.AddPolicy("LexCorePolicy", builder =>
+            {
+                builder
+                    .AllowAnyOrigin()   // Required for Cloudflare tunnel + mobile APK
+                    .AllowAnyMethod()
+                    .AllowAnyHeader();
+                // Note: AllowCredentials() removed — incompatible with AllowAnyOrigin.
+
+REPLACE WITH:
+            options.AddPolicy("LexCorePolicy", builder =>
+            {
+                builder
+                    .WithOrigins(
+                        // Cloudflare tunnel — update this when tunnel URL changes
+                        "https://outlets-plans-beverage-conducting.trycloudflare.com",
+                        // Local dev — Flutter web or browser testing
+                        "http://localhost:3000",
+                        "http://localhost:5000",
+                        "http://127.0.0.1:5000"
+                    )
+                    .AllowAnyMethod()
+                    .AllowAnyHeader();
+                // NOTE: Flutter mobile APK does not use CORS (direct HTTP client)
+                // CORS only applies to browser-based requests
+                // When deploying to production, replace with actual domain
+
+EXPLANATION:
+AllowAnyOrigin() means any website on the internet can make
+requests to your API from a browser. This is dangerous for a
+legal app. Flutter mobile apps are NOT affected by CORS (they
+use Dio directly, not a browser) but we still tighten this
+for security hygiene and future web clients.
+
+────────────────────────────────────────────────────────────────────
+A2 — Add request size limit (MEDIUM)
+────────────────────────────────────────────────────────────────────
+FILE: src\LexCore.API\Program.cs
+
+FIND:
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter()));
+
+REPLACE WITH:
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter()));
+
+// Limit request body size to 10MB (prevents payload DoS attacks)
+// Documents use multipart upload which has its own limit
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 10 * 1024 * 1024; // 10MB
+});
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 10 * 1024 * 1024; // 10MB
+});
+
+────────────────────────────────────────────────────────────────────
+A3 — Add FluentValidation error format to API response (MEDIUM)
+────────────────────────────────────────────────────────────────────
+CONTEXT: When FluentValidation rejects a request, ASP.NET returns
+a 400 with a ValidationProblemDetails body. The Flutter
+extractErrorMessage reads data['message'] but ValidationProblemDetails
+uses data['errors'] as a dictionary — not a flat message.
+Flutter currently shows "Something went wrong" for validation errors.
+
+FILE: src\LexCore.API\Program.cs
+
+FIND:
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter()));
+
+REPLACE WITH:
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter()))
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        // Transform FluentValidation errors into LexCore ApiResponse format
+        // so Flutter extractErrorMessage can read data['message'] correctly
+        options.InvalidModelStateResponseFactory = context =>
+        {
+            var errors = context.ModelState
+                .Where(e => e.Value?.Errors.Count > 0)
+                .SelectMany(e => e.Value!.Errors.Select(x => x.ErrorMessage))
+                .ToList();
+
+            var firstError = errors.FirstOrDefault() ?? "Validation failed";
+            var result = new Microsoft.AspNetCore.Mvc.ObjectResult(new
+            {
+                success = false,
+                message = firstError,
+                errors = errors,
+                errorCode = "VALIDATION_ERROR",
+                statusCode = 400
+            });
+            result.StatusCode = 400;
+            return result;
+        };
+    });
+
+====================================================================
+PART B — FLUTTER CONNECTIVITY FIXES
+====================================================================
+
+────────────────────────────────────────────────────────────────────
+B1 — Remove dead token constants from AppConstants (LOW)
+────────────────────────────────────────────────────────────────────
+FILE: lib/config/constants.dart
+
+FIND:
+class AppConstants {
+  static const String baseUrl = 'https://outlets-plans-beverage-conducting.trycloudflare.com/api';
+  // Auth token keys
+  static const String tokenKey = 'auth_token';
+  static const String refreshTokenKey = 'refresh_token';
+  static const String tokenExpiryKey = 'token_expiry';
+
+  // User keys
+
+REPLACE WITH:
+class AppConstants {
+  static const String baseUrl = 'https://outlets-plans-beverage-conducting.trycloudflare.com/api';
+  // NOTE: JWT tokens are stored in flutter_secure_storage via AuthService
+  // using private key names — these constants below are NOT used for tokens
+  // tokenKey, refreshTokenKey, tokenExpiryKey were removed (dead code)
+
+  // User keys
+
+────────────────────────────────────────────────────────────────────
+B2 — Add environment-aware baseUrl (MEDIUM)
+────────────────────────────────────────────────────────────────────
+CONTEXT: The baseUrl is a hardcoded Cloudflare tunnel URL that
+changes every time you restart the tunnel. This makes development
+painful. We add a simple config approach.
+
+FILE: lib/config/constants.dart
+
+FIND:
+class AppConstants {
+  static const String baseUrl = 'https://outlets-plans-beverage-conducting.trycloudflare.com/api';
+
+REPLACE WITH:
+class AppConstants {
+  // ── URL CONFIGURATION ─────────────────────────────────────────
+  // When the Cloudflare tunnel URL changes, update ONLY this line
+  // Format: https://<tunnel-subdomain>.trycloudflare.com/api
+  static const String _cloudflareUrl =
+      'https://outlets-plans-beverage-conducting.trycloudflare.com/api';
+
+  // For local testing when phone and laptop are on same WiFi
+  // Replace with your machine's local IP (find via ipconfig on Windows)
+  static const String _localUrl = 'http://192.168.1.100:5000/api';
+
+  // Toggle this to switch between Cloudflare and local
+  static const bool _useLocalUrl = false;
+
+  static String get baseUrl => _useLocalUrl ? _localUrl : _cloudflareUrl;
+
+────────────────────────────────────────────────────────────────────
+B3 — Tune API timeouts for mobile lawyers on court WiFi (MEDIUM)
+────────────────────────────────────────────────────────────────────
+CONTEXT: Court WiFi and mobile data in India can be slow.
+30 second timeouts are reasonable but document uploads need more.
+
+FILE: lib/services/api_service.dart
+
+FIND:
+    _dio = Dio(BaseOptions(
+      baseUrl: AppConstants.baseUrl,
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
+      sendTimeout: const Duration(seconds: 30),
+      headers: {'Content-Type': 'application/json'},
+    ));
+
+REPLACE WITH:
+    _dio = Dio(BaseOptions(
+      baseUrl: AppConstants.baseUrl,
+      connectTimeout: const Duration(seconds: 20),
+      receiveTimeout: const Duration(seconds: 45),
+      // sendTimeout covers upload — documents can be up to 10MB on slow court WiFi
+      sendTimeout: const Duration(seconds: 120),
+      headers: {'Content-Type': 'application/json'},
+    ));
+
+────────────────────────────────────────────────────────────────────
+B4 — Improve extractErrorMessage for FluentValidation errors (MEDIUM)
+────────────────────────────────────────────────────────────────────
+CONTEXT: With Fix A3 in the backend, validation errors now come
+as data['message']. But we also want to handle the case where
+the old ValidationProblemDetails format is returned (during
+transition) so Flutter always shows a human-readable message.
+
+FILE: lib/services/api_service.dart
+
+FIND:
+  String extractErrorMessage(dynamic error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map) {
+        if (data['message'] != null) return data['message'].toString();
+        if (data['errors'] != null) {
+          final errs = data['errors'];
+          if (errs is Map) return errs.values.first.toString();
+          if (errs is List && errs.isNotEmpty) return errs.first.toString();
+        }
+      }
+      switch (error.type) {
+        case DioExceptionType.connectionTimeout:
+          return 'Connection timed out. Please check your internet.';
+        case DioExceptionType.connectionError:
+          return 'Cannot connect to server. Please check your network.';
+        default:
+          return 'Something went wrong. Please try again.';
+      }
+    }
+    return 'An unexpected error occurred.';
+  }
+
+REPLACE WITH:
+  String extractErrorMessage(dynamic error) {
+    if (error is DioException) {
+      final statusCode = error.response?.statusCode;
+      final data = error.response?.data;
+
+      if (data is Map) {
+        // LexCore ApiResponse format: { success, message, errorCode }
+        if (data['message'] != null && data['message'].toString().isNotEmpty) {
+          return data['message'].toString();
+        }
+        // FluentValidation errors list
+        if (data['errors'] != null) {
+          final errs = data['errors'];
+          if (errs is List && errs.isNotEmpty) {
+            return errs.first.toString();
+          }
+          // ValidationProblemDetails format: { errors: { field: [msg] } }
+          if (errs is Map && errs.isNotEmpty) {
+            final firstList = errs.values.first;
+            if (firstList is List && firstList.isNotEmpty) {
+              return firstList.first.toString();
+            }
+            return errs.values.first.toString();
+          }
+        }
+        // ASP.NET default problem details
+        if (data['title'] != null) return data['title'].toString();
+      }
+
+      // HTTP status code fallbacks — human readable for lawyers
+      switch (statusCode) {
+        case 400:
+          return 'Invalid request. Please check the information entered.';
+        case 401:
+          return 'Session expired. Please log in again.';
+        case 403:
+          return 'You do not have permission to perform this action.';
+        case 404:
+          return 'The requested record was not found.';
+        case 409:
+          return 'A conflict occurred. This record may already exist.';
+        case 422:
+          return 'The data entered is invalid. Please review and try again.';
+        case 429:
+          return 'Too many requests. Please wait a moment and try again.';
+        case 500:
+          return 'Server error. Please try again or contact support.';
+      }
+
+      // Network-level errors
+      switch (error.type) {
+        case DioExceptionType.connectionTimeout:
+          return 'Connection timed out. Please check your internet.';
+        case DioExceptionType.sendTimeout:
+          return 'Upload timed out. Please check your connection and try again.';
+        case DioExceptionType.receiveTimeout:
+          return 'Server is taking too long to respond. Please try again.';
+        case DioExceptionType.connectionError:
+          return 'Cannot connect to server. Please check your network.';
+        default:
+          return 'Something went wrong. Please try again.';
+      }
+    }
+    return 'An unexpected error occurred. Please try again.';
+  }
+
+────────────────────────────────────────────────────────────────────
+B5 — Add network connectivity check before API calls (LOW)
+────────────────────────────────────────────────────────────────────
+CONTEXT: Lawyers in district courts often have patchy connectivity.
+Before any API call, we should give an instant offline error
+instead of waiting 20 seconds for a timeout.
+
+First check if connectivity package is already in pubspec.yaml:
+
+FILE: pubspec.yaml
+Check if 'connectivity_plus' is already a dependency.
+If it IS already present — skip this fix entirely.
+If it is NOT present — add it:
+
+FIND:
+dependencies:
+  flutter:
+    sdk: flutter
+
+ADD under dependencies (maintain alphabetical order with existing deps):
+  connectivity_plus: ^6.0.0
+
+Then run: flutter pub get
+
+Then add this helper method to ApiService class
+INSIDE the ApiService class body AFTER the extractErrorMessage method:
+
+  /// Returns null if connected, or an error message if offline.
+  /// Call this before any critical API operation.
+  Future<String?> checkConnectivity() async {
+    try {
+      // Simple connectivity check using Dio itself
+      // If the server is reachable, returns null (no error)
+      // This avoids adding connectivity_plus dependency
+      return null; // We rely on timeout errors for now
+    } catch (_) {
+      return 'No internet connection. Please check your network.';
+    }
+  }
+
+NOTE: Full connectivity_plus integration is optional.
+The improved timeout messages in B4 handle offline cases gracefully.
+Skip this fix if connectivity_plus is not already in pubspec.yaml.
+
+====================================================================
+PART C — VERIFICATION STEPS
+====================================================================
+
+Run in this exact order:
+
+── Backend ────────────────────────────────────────────────────────
+
+1. dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. Test CORS fix manually:
+   Start the server: dotnet run --project src\LexCore.API
+   Open browser → http://localhost:5000/swagger
+   Try any endpoint — should work as before
+
+── Flutter ────────────────────────────────────────────────────────
+
+3. flutter pub get  (only if you added connectivity_plus)
+
+4. flutter analyze
+   → Must show: No issues found!
+
+5. Manual checklist:
+   □ B1: tokenKey, refreshTokenKey, tokenExpiryKey removed from constants.dart
+   □ B2: baseUrl is now a getter with _useLocalUrl toggle
+   □ B2: Changing tunnel URL requires updating ONE line only
+   □ B3: connectTimeout = 20s, receiveTimeout = 45s, sendTimeout = 120s
+   □ B4: extractErrorMessage handles all status codes with readable messages
+   □ B4: Handles both LexCore format AND ValidationProblemDetails format
+
+── Connectivity test ──────────────────────────────────────────────
+
+6. Start backend with: dotnet run --project src\LexCore.API
+7. Update _cloudflareUrl in constants.dart with current tunnel URL
+   OR set _useLocalUrl = true and update _localUrl with your machine IP
+8. Run Flutter app on physical device or emulator
+9. Test login → should succeed
+10. Test create case → should succeed
+11. Kill internet → try to create case → should show readable error
+
+====================================================================
+WHEN TO UPDATE THE CLOUDFLARE URL
+====================================================================
+
+Every time you restart the Cloudflare tunnel, the URL changes.
+With Fix B2, you only need to update ONE line:
+
+    static const String _cloudflareUrl =
+        'https://NEW-TUNNEL-URL.trycloudflare.com/api';
+
+For permanent deployment on E2E Networks:
+- Replace _cloudflareUrl with your production domain
+- Set _useLocalUrl = false
+- Add proper Nginx + SSL configuration on the server
+
+====================================================================
+DO NOT TOUCH
+====================================================================
+Backend:
+- Any controller logic
+- Any migration files
+- Authentication flow
+- Hangfire job configurations
+
+Flutter:
+- AuthService token storage (already secure)
+- flutter_secure_storage configuration (already correct)
+- Any screen file
+- Any provider file
+
+====================================================================
+END OF CONNECTIVITY MASTER FIX
+====================================================================

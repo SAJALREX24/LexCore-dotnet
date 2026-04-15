@@ -6,6 +6,11 @@ public class UpdateUserRequest
 {
     public string? Name { get; set; }
     public string? Email { get; set; }
+    public string? Phone { get; set; }
+    public string? BarEnrollmentNumber { get; set; }
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public string? CourtType { get; set; }
 }
 
 public class UserDetailDto

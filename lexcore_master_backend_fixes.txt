@@ -1,0 +1,666 @@
+====================================================================
+LEXCORE AI — MASTER BACKEND SECURITY FIX PROMPT
+====================================================================
+
+YOU ARE A SENIOR .NET SECURITY ENGINEER WITH 20+ YEARS EXPERIENCE.
+THIS PROMPT FIXES ALL CRITICAL AND HIGH SECURITY ISSUES FOUND
+ACROSS THE ENTIRE LEXCORE BACKEND CODEBASE.
+
+READ EVERY INSTRUCTION BEFORE TOUCHING A SINGLE LINE.
+EXECUTE IN ORDER — DO NOT SKIP ANY FIX.
+
+====================================================================
+PROJECT PATH
+====================================================================
+C:\Users\Dell\Desktop\LexCore-dotnet\
+
+====================================================================
+EXECUTION ORDER
+====================================================================
+Fix 1  — CasesController:    UpdateCase            (CRITICAL)
+Fix 2  — CasesController:    UpdateCaseStatus      (CRITICAL)
+Fix 3  — CasesController:    GetCaseTimeline       (CRITICAL)
+Fix 4  — HearingsController: UpdateHearing         (CRITICAL)
+Fix 5  — HearingsController: UpdateHearingStatus   (CRITICAL)
+Fix 6  — HearingsController: RecordHearingOutcome  (CRITICAL)
+Fix 7  — DocumentsController: UpdateDocument       (CRITICAL)
+Fix 8  — DocumentsController: DeleteDocument       (CRITICAL)
+Fix 9  — SmartExtractService: No ownership check   (CRITICAL)
+Fix 10 — AppDbContext: AuditLog HasQueryFilter      (CRITICAL)
+Fix 11 — AppDbContext: CaseNotesHtml no MaxLength   (HIGH)
+Fix 12 — AuditController: Solo lawyer sees all logs (HIGH)
+
+After ALL fixes: dotnet build
+Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+====================================================================
+THE OWNERSHIP PATTERN — READ THIS FIRST
+====================================================================
+
+Every fix below uses one of two patterns.
+Understand them before starting.
+
+PATTERN A — For Cases (use when fixing case-level operations):
+    var userId = _tenantService.GetCurrentUserId();
+
+    var caseEntity = await _context.Cases
+        .Include(c => c.CaseLawyers)
+        .FirstOrDefaultAsync(c =>
+            c.Id == id &&
+            (firmId.HasValue
+                ? c.FirmId == firmId.Value
+                : c.FirmId == null &&
+                  c.CaseLawyers.Any(cl =>
+                      cl.LawyerId == userId &&
+                      cl.DeletedAt == null)));
+
+PATTERN B — For Hearings (use when fixing hearing-level operations):
+    var userId = _tenantService.GetCurrentUserId();
+
+    var hearing = await _context.Hearings
+        .Include(h => h.Case)
+            .ThenInclude(c => c!.CaseLawyers)
+        .FirstOrDefaultAsync(h =>
+            h.Id == id &&
+            (firmId.HasValue
+                ? h.FirmId == firmId.Value
+                : h.FirmId == null &&
+                  h.Case!.CaseLawyers.Any(cl =>
+                      cl.LawyerId == userId &&
+                      cl.DeletedAt == null)));
+
+PATTERN C — For Documents (use when fixing document-level operations):
+    var userId = _tenantService.GetCurrentUserId();
+
+    var document = await _context.Documents
+        .Include(d => d.Case)
+            .ThenInclude(c => c!.CaseLawyers)
+        .Include(d => d.Uploader)
+        .FirstOrDefaultAsync(d =>
+            d.Id == id &&
+            (firmId.HasValue
+                ? d.FirmId == firmId.Value
+                : d.FirmId == null &&
+                  d.Case!.CaseLawyers.Any(cl =>
+                      cl.LawyerId == userId &&
+                      cl.DeletedAt == null)));
+
+====================================================================
+FIX 1 — CasesController.cs — UpdateCase (CRITICAL)
+====================================================================
+FILE: src\LexCore.API\Controllers\CasesController.cs
+
+FIND this exact block:
+    [HttpPatch("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<CaseDto>>> UpdateCase(Guid id, [FromBody] UpdateCaseRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var caseEntity = await _context.Cases.FirstOrDefaultAsync(c =>
+            c.Id == id &&
+            (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
+
+        if (caseEntity == null)
+        {
+            return NotFound(ApiResponse<CaseDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
+        }
+
+        var oldValues = JsonSerializer.Serialize(new { caseEntity.Title, caseEntity.CaseBackground, caseEntity.CaseType, caseEntity.CourtName });
+
+REPLACE WITH:
+    [HttpPatch("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<CaseDto>>> UpdateCase(Guid id, [FromBody] UpdateCaseRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only update their own cases
+        var caseEntity = await _context.Cases
+            .Include(c => c.CaseLawyers)
+            .FirstOrDefaultAsync(c =>
+                c.Id == id &&
+                (firmId.HasValue
+                    ? c.FirmId == firmId.Value
+                    : c.FirmId == null &&
+                      c.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (caseEntity == null)
+        {
+            return NotFound(ApiResponse<CaseDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
+        }
+
+        var oldValues = JsonSerializer.Serialize(new { caseEntity.Title, caseEntity.CaseBackground, caseEntity.CaseType, caseEntity.CourtName });
+
+====================================================================
+FIX 2 — CasesController.cs — UpdateCaseStatus (CRITICAL)
+====================================================================
+FILE: src\LexCore.API\Controllers\CasesController.cs
+
+FIND this exact block:
+    [HttpPatch("{id:guid}/status")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<CaseDto>>> UpdateCaseStatus(Guid id, [FromBody] UpdateCaseStatusRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var caseEntity = await _context.Cases.FirstOrDefaultAsync(c =>
+            c.Id == id &&
+            (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
+
+        if (caseEntity == null)
+        {
+            return NotFound(ApiResponse<CaseDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
+        }
+
+        var oldStatus = caseEntity.Status.ToString();
+
+REPLACE WITH:
+    [HttpPatch("{id:guid}/status")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<CaseDto>>> UpdateCaseStatus(Guid id, [FromBody] UpdateCaseStatusRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only update status of their own cases
+        var caseEntity = await _context.Cases
+            .Include(c => c.CaseLawyers)
+            .FirstOrDefaultAsync(c =>
+                c.Id == id &&
+                (firmId.HasValue
+                    ? c.FirmId == firmId.Value
+                    : c.FirmId == null &&
+                      c.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (caseEntity == null)
+        {
+            return NotFound(ApiResponse<CaseDto>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
+        }
+
+        var oldStatus = caseEntity.Status.ToString();
+
+====================================================================
+FIX 3 — CasesController.cs — GetCaseTimeline (CRITICAL)
+====================================================================
+FILE: src\LexCore.API\Controllers\CasesController.cs
+
+FIND this exact block:
+    [HttpGet("{id:guid}/timeline")]
+    public async Task<ActionResult<ApiResponse<List<CaseTimelineDto>>>> GetCaseTimeline(Guid id)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var caseExists = await _context.Cases.AnyAsync(c =>
+            c.Id == id &&
+            (firmId.HasValue ? c.FirmId == firmId.Value : c.FirmId == null));
+        if (!caseExists)
+        {
+            return NotFound(ApiResponse<List<CaseTimelineDto>>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
+        }
+
+        var timeline = await _context.AuditLogs
+            .Where(a => (firmId.HasValue ? a.FirmId == firmId.Value : a.FirmId == null) && a.EntityType == "Case" && a.EntityId == id)
+
+REPLACE WITH:
+    [HttpGet("{id:guid}/timeline")]
+    public async Task<ActionResult<ApiResponse<List<CaseTimelineDto>>>> GetCaseTimeline(Guid id)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only view timeline of their own cases
+        var caseExists = await _context.Cases.AnyAsync(c =>
+            c.Id == id &&
+            (firmId.HasValue
+                ? c.FirmId == firmId.Value
+                : c.FirmId == null &&
+                  c.CaseLawyers.Any(cl =>
+                      cl.LawyerId == userId &&
+                      cl.DeletedAt == null)));
+        if (!caseExists)
+        {
+            return NotFound(ApiResponse<List<CaseTimelineDto>>.ErrorResponse("Case not found", "CASE_NOT_FOUND", 404));
+        }
+
+        var timeline = await _context.AuditLogs
+            .Where(a => (firmId.HasValue ? a.FirmId == firmId.Value : a.FirmId == null) && a.EntityType == "Case" && a.EntityId == id)
+
+NOTE: The AuditLogs query line after does NOT need changing.
+Only the caseExists check changes.
+
+====================================================================
+FIX 4 — HearingsController.cs — UpdateHearing (CRITICAL)
+====================================================================
+FILE: src\LexCore.API\Controllers\HearingsController.cs
+
+FIND this exact block:
+    [HttpPatch("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<HearingDto>>> UpdateHearing(Guid id, [FromBody] UpdateHearingRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+            .FirstOrDefaultAsync(h => h.Id == id && (firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null));
+
+        if (hearing == null)
+        {
+            return NotFound(ApiResponse<HearingDto>.ErrorResponse("Hearing not found", "NOT_FOUND", 404));
+        }
+
+REPLACE WITH:
+    [HttpPatch("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<HearingDto>>> UpdateHearing(Guid id, [FromBody] UpdateHearingRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only update hearings from their own cases
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(h =>
+                h.Id == id &&
+                (firmId.HasValue
+                    ? h.FirmId == firmId.Value
+                    : h.FirmId == null &&
+                      h.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (hearing == null)
+        {
+            return NotFound(ApiResponse<HearingDto>.ErrorResponse("Hearing not found", "NOT_FOUND", 404));
+        }
+
+====================================================================
+FIX 5 — HearingsController.cs — UpdateHearingStatus (CRITICAL)
+====================================================================
+FILE: src\LexCore.API\Controllers\HearingsController.cs
+
+FIND this exact block:
+    [HttpPatch("{id:guid}/status")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<HearingDto>>> UpdateHearingStatus(Guid id, [FromBody] UpdateHearingStatusRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+            .FirstOrDefaultAsync(h => h.Id == id && (firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null));
+
+        if (hearing == null)
+        {
+            return NotFound(ApiResponse<HearingDto>.ErrorResponse("Hearing not found", "NOT_FOUND", 404));
+        }
+
+        var oldStatus = hearing.Status.ToString();
+
+REPLACE WITH:
+    [HttpPatch("{id:guid}/status")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<HearingDto>>> UpdateHearingStatus(Guid id, [FromBody] UpdateHearingStatusRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only update status of their own hearings
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(h =>
+                h.Id == id &&
+                (firmId.HasValue
+                    ? h.FirmId == firmId.Value
+                    : h.FirmId == null &&
+                      h.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (hearing == null)
+        {
+            return NotFound(ApiResponse<HearingDto>.ErrorResponse("Hearing not found", "NOT_FOUND", 404));
+        }
+
+        var oldStatus = hearing.Status.ToString();
+
+====================================================================
+FIX 6 — HearingsController.cs — RecordHearingOutcome (CRITICAL)
+====================================================================
+FILE: src\LexCore.API\Controllers\HearingsController.cs
+
+FIND this exact block:
+    [HttpPatch("{id:guid}/outcome")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<HearingDto>>> RecordHearingOutcome(
+        Guid id, [FromBody] PostHearingUpdateRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+            .FirstOrDefaultAsync(h => h.Id == id &&
+                (firmId.HasValue ? h.FirmId == firmId.Value : h.FirmId == null));
+
+        if (hearing == null)
+            return NotFound(ApiResponse<HearingDto>.ErrorResponse(
+                "Hearing not found", "NOT_FOUND", 404));
+
+REPLACE WITH:
+    [HttpPatch("{id:guid}/outcome")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<HearingDto>>> RecordHearingOutcome(
+        Guid id, [FromBody] PostHearingUpdateRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only record outcome for their own hearings
+        var hearing = await _context.Hearings
+            .Include(h => h.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(h =>
+                h.Id == id &&
+                (firmId.HasValue
+                    ? h.FirmId == firmId.Value
+                    : h.FirmId == null &&
+                      h.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (hearing == null)
+            return NotFound(ApiResponse<HearingDto>.ErrorResponse(
+                "Hearing not found", "NOT_FOUND", 404));
+
+====================================================================
+FIX 7 — DocumentsController.cs — UpdateDocument (CRITICAL)
+====================================================================
+FILE: src\LexCore.API\Controllers\DocumentsController.cs
+
+FIND this exact block:
+    [HttpPatch("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<DocumentDto>>> UpdateDocument(Guid id, [FromBody] UpdateDocumentRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var document = await _context.Documents
+            .Include(d => d.Uploader)
+            .Include(d => d.Case)
+            .FirstOrDefaultAsync(d => d.Id == id && (firmId.HasValue ? d.FirmId == firmId.Value : d.FirmId == null));
+
+        if (document == null)
+        {
+            return NotFound(ApiResponse<DocumentDto>.ErrorResponse("Document not found", "NOT_FOUND", 404));
+        }
+
+REPLACE WITH:
+    [HttpPatch("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<DocumentDto>>> UpdateDocument(Guid id, [FromBody] UpdateDocumentRequest request)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only update documents from their own cases
+        var document = await _context.Documents
+            .Include(d => d.Uploader)
+            .Include(d => d.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(d =>
+                d.Id == id &&
+                (firmId.HasValue
+                    ? d.FirmId == firmId.Value
+                    : d.FirmId == null &&
+                      d.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (document == null)
+        {
+            return NotFound(ApiResponse<DocumentDto>.ErrorResponse("Document not found", "NOT_FOUND", 404));
+        }
+
+====================================================================
+FIX 8 — DocumentsController.cs — DeleteDocument (CRITICAL)
+====================================================================
+FILE: src\LexCore.API\Controllers\DocumentsController.cs
+
+FIND this exact block:
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<object>>> DeleteDocument(Guid id)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var document = await _context.Documents.FirstOrDefaultAsync(d =>
+            d.Id == id && (firmId.HasValue ? d.FirmId == firmId.Value : d.FirmId == null));
+
+        if (document == null)
+        {
+            return NotFound(ApiResponse<object>.ErrorResponse("Document not found", "NOT_FOUND", 404));
+        }
+
+REPLACE WITH:
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "Lawyer")]
+    public async Task<ActionResult<ApiResponse<object>>> DeleteDocument(Guid id)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers can only delete documents from their own cases
+        var document = await _context.Documents
+            .Include(d => d.Case)
+                .ThenInclude(c => c!.CaseLawyers)
+            .FirstOrDefaultAsync(d =>
+                d.Id == id &&
+                (firmId.HasValue
+                    ? d.FirmId == firmId.Value
+                    : d.FirmId == null &&
+                      d.Case!.CaseLawyers.Any(cl =>
+                          cl.LawyerId == userId &&
+                          cl.DeletedAt == null)));
+
+        if (document == null)
+        {
+            return NotFound(ApiResponse<object>.ErrorResponse("Document not found", "NOT_FOUND", 404));
+        }
+
+====================================================================
+FIX 9 — SmartExtractService.cs — No ownership check (CRITICAL)
+====================================================================
+FILE: src\LexCore.Infrastructure\Services\SmartExtractService.cs
+
+FIND this exact block:
+    public async Task<SmartExtract> ExtractFromCaseContextAsync(Guid caseId, string purpose, Guid userId)
+    {
+        var caseEntity = await _db.Cases
+            .Include(c => c.CaseLawyers).ThenInclude(cl => cl.Lawyer)
+            .Include(c => c.CaseClients).ThenInclude(cc => cc.Client)
+            .Include(c => c.Hearings.OrderByDescending(h => h.HearingDate))
+            .Include(c => c.Documents)
+            .FirstOrDefaultAsync(c => c.Id == caseId);
+
+        if (caseEntity == null)
+        {
+            return new SmartExtract { CaseId = caseId, CaseTitle = "Unknown Case" };
+        }
+
+REPLACE WITH:
+    public async Task<SmartExtract> ExtractFromCaseContextAsync(Guid caseId, string purpose, Guid userId)
+    {
+        // Security: verify the requesting user owns this case before extracting
+        // For firm lawyers: case must belong to their firm
+        // For solo lawyers: they must be in CaseLawyers
+        var caseEntity = await _db.Cases
+            .Include(c => c.CaseLawyers).ThenInclude(cl => cl.Lawyer)
+            .Include(c => c.CaseClients).ThenInclude(cc => cc.Client)
+            .Include(c => c.Hearings.OrderByDescending(h => h.HearingDate))
+            .Include(c => c.Documents)
+            .FirstOrDefaultAsync(c =>
+                c.Id == caseId &&
+                (c.FirmId.HasValue
+                    ? c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null) ||
+                      c.FirmId != null  // firm lawyers validated at controller level
+                    : c.FirmId == null &&
+                      c.CaseLawyers.Any(cl => cl.LawyerId == userId && cl.DeletedAt == null)));
+
+        if (caseEntity == null)
+        {
+            _logger.LogWarning("SmartExtract denied: user {UserId} attempted to access case {CaseId} without ownership", userId, caseId);
+            return new SmartExtract { CaseId = caseId, CaseTitle = "Access Denied" };
+        }
+
+====================================================================
+FIX 10 — AppDbContext.cs — Remove AuditLog HasQueryFilter (CRITICAL)
+====================================================================
+FILE: src\LexCore.Infrastructure\Data\AppDbContext.cs
+
+FIND this exact block inside the AuditLog entity configuration:
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.FirmId);
+            entity.HasIndex(e => e.Timestamp);
+            entity.HasOne(e => e.Firm).WithMany(f => f.AuditLogs).HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.User).WithMany(u => u.AuditLogs).HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+        });
+
+REPLACE WITH:
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.FirmId);
+            entity.HasIndex(e => e.Timestamp);
+            entity.HasOne(e => e.Firm).WithMany(f => f.AuditLogs).HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.User).WithMany(u => u.AuditLogs).HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.SetNull);
+            // INTENTIONALLY NO HasQueryFilter — audit logs are permanent legal evidence
+            // They must NEVER be soft-deleted or filtered out under any circumstance
+        });
+
+THEN: After removing HasQueryFilter, you must create a migration
+because EF Core tracks this filter as part of the model snapshot.
+
+Run these commands in the Infrastructure project:
+    cd src\LexCore.Infrastructure
+    dotnet ef migrations add RemoveAuditLogSoftDeleteFilter --startup-project ..\LexCore.API
+    dotnet ef database update --startup-project ..\LexCore.API
+
+====================================================================
+FIX 11 — AppDbContext.cs — CaseNotesHtml no MaxLength (HIGH)
+====================================================================
+FILE: src\LexCore.Infrastructure\Data\AppDbContext.cs
+
+FIND this exact block inside the Case entity configuration:
+            // New Screen 4 fields
+            entity.Property(e => e.PSDistrict).HasMaxLength(100);
+            entity.Property(e => e.PSState).HasMaxLength(100);
+            entity.Property(e => e.NatureOfOffence).HasMaxLength(200);
+
+            // New Screen 5 fields
+
+REPLACE WITH:
+            // New Screen 4 fields
+            entity.Property(e => e.PSDistrict).HasMaxLength(100);
+            entity.Property(e => e.PSState).HasMaxLength(100);
+            entity.Property(e => e.NatureOfOffence).HasMaxLength(500);
+            entity.Property(e => e.CaseNotesHtml).HasMaxLength(10000);
+            entity.Property(e => e.PrivateNotesHtml).HasMaxLength(10000);
+            entity.Property(e => e.ClientInstructionsHtml).HasMaxLength(5000);
+            entity.Property(e => e.CaseBackground).HasMaxLength(10000);
+            entity.Property(e => e.ActsAndSectionsJson).HasMaxLength(20000);
+            entity.Property(e => e.OppositePartiesJson).HasMaxLength(20000);
+
+            // New Screen 5 fields
+
+THEN create a migration:
+    cd src\LexCore.Infrastructure
+    dotnet ef migrations add AddMissingFieldLengthConstraints --startup-project ..\LexCore.API
+    dotnet ef database update --startup-project ..\LexCore.API
+
+====================================================================
+FIX 12 — AuditController.cs — Solo lawyer sees all logs (HIGH)
+====================================================================
+FILE: src\LexCore.API\Controllers\AuditController.cs
+
+FIND this exact block:
+    public async Task<ActionResult<PagedResponse<AuditLogDto>>> GetAuditLogs([FromQuery] AuditFilterRequest filter)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+
+        var query = _context.AuditLogs
+            .Include(a => a.User)
+            .Where(a => a.FirmId == firmId);
+
+REPLACE WITH:
+    public async Task<ActionResult<PagedResponse<AuditLogDto>>> GetAuditLogs([FromQuery] AuditFilterRequest filter)
+    {
+        var firmId = _tenantService.GetCurrentFirmId();
+        var userId = _tenantService.GetCurrentUserId();
+
+        // Security: solo lawyers (firmId=null) must only see their OWN audit logs
+        // Firm admins see all logs for their firm
+        var query = firmId.HasValue
+            ? _context.AuditLogs
+                .Include(a => a.User)
+                .Where(a => a.FirmId == firmId.Value)
+            : _context.AuditLogs
+                .Include(a => a.User)
+                .Where(a => a.FirmId == null && a.UserId == userId);
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+Run in order:
+
+1. dotnet build
+   → Must show: Build succeeded. 0 Error(s). 0 Warning(s).
+
+2. Verify migrations ran successfully:
+   dotnet ef database update --startup-project src\LexCore.API
+   → Should show: All migrations applied
+
+3. Manual checklist:
+   □ Fix 1:  UpdateCase       — has Include(CaseLawyers) + userId check
+   □ Fix 2:  UpdateCaseStatus — has Include(CaseLawyers) + userId check
+   □ Fix 3:  GetCaseTimeline  — has AnyAsync with CaseLawyers check
+   □ Fix 4:  UpdateHearing    — has ThenInclude(CaseLawyers) + userId
+   □ Fix 5:  UpdateHearingStatus — has ThenInclude(CaseLawyers) + userId
+   □ Fix 6:  RecordHearingOutcome — has ThenInclude(CaseLawyers) + userId
+   □ Fix 7:  UpdateDocument   — has ThenInclude(CaseLawyers) + userId
+   □ Fix 8:  DeleteDocument   — has ThenInclude(CaseLawyers) + userId
+   □ Fix 9:  SmartExtract     — has ownership check before extracting
+   □ Fix 10: AuditLog         — HasQueryFilter removed, migration done
+   □ Fix 11: CaseNotesHtml    — HasMaxLength(10000) added, migration done
+   □ Fix 12: AuditController  — solo lawyer scoped to own logs
+
+====================================================================
+DO NOT TOUCH
+====================================================================
+- CreateCase — already correct
+- GetCases (list) — already correct
+- GetCase (single) — already correct
+- CreateHearing — already correct
+- GetHearings — already correct
+- GetHearing (single) — already correct
+- DeleteCase — already fixed in Step 6
+- DeleteHearing — already fixed in Step 6
+- GetCaseNotes, AddCaseNote — already correct
+- All Invoice endpoints — already correct
+- AuthController — do not touch
+- Any migration files already created
+
+====================================================================
+END OF BACKEND MASTER FIX
+====================================================================

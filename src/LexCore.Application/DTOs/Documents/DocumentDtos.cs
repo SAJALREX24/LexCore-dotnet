@@ -10,6 +10,10 @@ public class UploadDocumentRequest
     public string? Description { get; set; }
     public string? Tags { get; set; }
     public bool IsClientVisible { get; set; } = true;
+    public string? DocumentCategory { get; set; }
+    public string? DocumentTag { get; set; }
+    public string? DocumentSource { get; set; }
+    public Guid? HearingId { get; set; }
 }
 
 public class UpdateDocumentRequest
@@ -34,6 +38,11 @@ public class DocumentDto
     public string UploadedByName { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public string? DocumentCategory { get; set; }
+    public string? DocumentTag { get; set; }
+    public string? DocumentSource { get; set; }
+    public Guid? HearingId { get; set; }
+    public string? AIDraftStatus { get; set; }
 }
 
 public class DocumentVersionDto

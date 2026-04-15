@@ -1,0 +1,488 @@
+====================================================================
+LEXCORE AI — STEP 14-PRE PHASE A
+SOLO LAWYER CLEANUP: DOMAIN ENTITIES + DBCONTEXT + MIGRATION
+====================================================================
+
+YOU ARE A 30+ YEAR EXPERIENCED ASP.NET CORE DEVELOPER AND DATABASE
+ENGINEER. READ THIS ENTIRE FILE BEFORE TOUCHING A SINGLE LINE.
+EXECUTE EVERY TASK IN ORDER. DO NOT SKIP ANY TASK.
+
+====================================================================
+PROJECT CONTEXT
+====================================================================
+
+LexCore AI is being repositioned from a dual-mode product (solo
+lawyers + law firms) to a solo-lawyer-only product for v1. Firm
+support may return in v2 as a separate feature addition, but for
+now every trace of the firm concept must be removed cleanly.
+
+This is Phase A of a 3-phase cleanup. After Phase A runs, the
+project WILL NOT COMPILE. That is intentional and expected. The
+compile errors become the checklist for Phases B and C.
+
+Do NOT try to make the project compile in this phase. Do NOT
+touch controllers, services, middleware, or DTOs in this phase.
+Only touch what is explicitly listed below.
+
+Backend project: C:\Users\Dell\Desktop\LexCore-dotnet\
+
+====================================================================
+PRE-FLIGHT CHECKS
+====================================================================
+
+1. Verify test database is empty or disposable. The user has
+   confirmed all existing data is test data and can be wiped.
+
+2. Verify current git state: run `git status`. If there are
+   uncommitted changes, STOP and ask the user to commit or stash
+   first. This phase is destructive and reversibility depends on
+   a clean starting commit.
+
+3. Create a safety branch: `git checkout -b step14pre-solo-cleanup`
+
+====================================================================
+INVIOLABLE RULES
+====================================================================
+
+1. Do NOT modify any file outside the explicit task list.
+2. Do NOT try to fix compile errors in controllers/services/DTOs
+   during this phase. Those are Phase B and Phase C territory.
+3. Do NOT touch the Flutter project. This is backend only.
+4. The string literal "Firm" appears in Case.cs as a CLIENT TYPE
+   value ("Individual","Company","Firm"). That is CLIENT data
+   describing the client's organization type. It is NOT related
+   to the LexCore Firm entity. DO NOT TOUCH IT.
+5. `CaseLawyers` junction table stays. It is the ownership
+   mechanism for solo lawyers (one lawyer owns one case).
+6. `CaseClients` junction table gets deleted entirely in Phase C.
+   For Phase A, we only touch the Domain layer definition.
+7. The `Client` role is being deleted. `UserRole.Client` enum
+   value must be marked [Obsolete] but NOT removed (removing an
+   enum value breaks any serialized audit logs that reference it).
+8. `UserRole.FirmAdmin` must be marked [Obsolete] but NOT removed
+   for the same reason.
+
+====================================================================
+TASK 1 — DELETE THE FIRM ENTITY FILE
+====================================================================
+
+FILE: backend/src/LexCore.Domain/Entities/Firm.cs
+
+Delete this file entirely. It is a standalone file — nothing else
+in the Domain project depends on it living here.
+
+====================================================================
+TASK 2 — DELETE THE FIRM DTOS FILE
+====================================================================
+
+FILE: backend/src/LexCore.Application/DTOs/Firms/FirmDtos.cs
+
+Delete this file entirely. Also delete the empty
+backend/src/LexCore.Application/DTOs/Firms/ directory if it
+becomes empty after this file is removed.
+
+====================================================================
+TASK 3 — DELETE THE SUBSCRIPTION ENTITY AND ENUMS
+====================================================================
+
+LexCore v1 ships as free trial for all solo lawyers. Per-lawyer
+subscription billing is a v2 feature. For v1, the entire
+Subscription surface area is deleted.
+
+Delete these files:
+  backend/src/LexCore.Domain/Entities/Subscription.cs
+  backend/src/LexCore.Domain/Enums/SubscriptionPlan.cs
+  backend/src/LexCore.Domain/Enums/SubscriptionStatus.cs
+
+====================================================================
+TASK 4 — FLATTEN BaseEntity.cs: REMOVE TenantEntity
+====================================================================
+
+FILE: backend/src/LexCore.Domain/Entities/BaseEntity.cs
+
+CURRENT CONTENT:
+
+    namespace LexCore.Domain.Entities;
+
+    public abstract class BaseEntity
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? DeletedAt { get; set; }
+        public bool IsDeleted => DeletedAt.HasValue;
+    }
+
+    public abstract class TenantEntity : BaseEntity
+    {
+        public Guid? FirmId { get; set; }
+        public Firm? Firm { get; set; }
+    }
+
+REPLACE WITH (remove the TenantEntity class entirely):
+
+    namespace LexCore.Domain.Entities;
+
+    public abstract class BaseEntity
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? DeletedAt { get; set; }
+        public bool IsDeleted => DeletedAt.HasValue;
+    }
+
+====================================================================
+TASK 5 — CHANGE INHERITANCE ON ALL 9 ENTITIES
+====================================================================
+
+Every entity that currently inherits from `TenantEntity` must now
+inherit from `BaseEntity` directly. This transparently removes
+the FirmId column and Firm navigation property from each one.
+
+Apply this change to EXACTLY these 9 files:
+
+  backend/src/LexCore.Domain/Entities/Case.cs
+  backend/src/LexCore.Domain/Entities/User.cs
+  backend/src/LexCore.Domain/Entities/Document.cs
+  backend/src/LexCore.Domain/Entities/Hearing.cs
+  backend/src/LexCore.Domain/Entities/Invoice.cs
+  backend/src/LexCore.Domain/Entities/Payment.cs
+  backend/src/LexCore.Domain/Entities/Chat.cs
+  backend/src/LexCore.Domain/Entities/AuditLog.cs
+  backend/src/LexCore.Domain/Entities/Notification.cs
+
+For each file, find the class declaration line:
+
+    public class <EntityName> : TenantEntity
+
+And change to:
+
+    public class <EntityName> : BaseEntity
+
+Do not touch anything else in these files. Do not remove any other
+properties. Do not add any new properties. Just the inheritance
+change.
+
+After editing Case.cs, VERIFY that the ClientType comment is still
+intact — it contains the word "Firm" as a string literal describing
+a client type. That is not our Firm entity. Leave it alone.
+
+====================================================================
+TASK 6 — REMOVE FIRM/SUBSCRIPTION DBSETS FROM AppDbContext
+====================================================================
+
+FILE: backend/src/LexCore.Infrastructure/Data/AppDbContext.cs
+
+6.1 — Remove DbSet declarations
+
+Find and DELETE these lines:
+
+    public DbSet<Firm> Firms { get; set; }
+    public DbSet<Subscription> Subscriptions { get; set; }
+
+The exact line numbers will vary; search by text.
+
+6.2 — Remove Firm entity configuration block
+
+Search for a block that starts with something like:
+
+    modelBuilder.Entity<Firm>(entity =>
+    {
+
+Delete the entire configuration block from the opening
+`modelBuilder.Entity<Firm>(entity =>` line through its closing
+`});` — everything about Slug uniqueness, foreign keys, query
+filter, etc.
+
+6.3 — Remove Subscription entity configuration block
+
+Same treatment for any `modelBuilder.Entity<Subscription>(entity =>`
+block. Delete the whole thing.
+
+6.4 — Remove FirmId references from OTHER entity configurations
+
+For each of these 9 entities in AppDbContext:
+  Case, User, Document, Hearing, Invoice, Payment, Chat, AuditLog,
+  Notification
+
+Find the `modelBuilder.Entity<...>(entity =>` block and remove:
+  - Any `entity.HasIndex(e => e.FirmId)` line
+  - Any `entity.HasOne(e => e.Firm).WithMany(f => f.<collection>)
+        .HasForeignKey(e => e.FirmId).OnDelete(DeleteBehavior.Cascade)`
+    chain — delete the entire chain
+  - Any composite index that includes FirmId — replace with an
+    equivalent index that removes FirmId from the tuple. For
+    example:
+        HasIndex(e => new { e.FirmId, e.Status })
+    becomes:
+        HasIndex(e => e.Status)
+
+DO NOT touch:
+  - The CaseNumber unique index on Case (IX_Cases_CaseNumber_Unique)
+  - DeletedAt query filters
+  - Any non-firm-related foreign keys
+  - Indexes on Email, Slug, Phone (the User entity's Slug index
+    is for User.Slug not Firm.Slug; leave it alone. If User has
+    no Slug property, skip)
+
+6.5 — Verify
+
+After editing, there should be ZERO occurrences of the words
+`Firm`, `firmId`, `FirmId`, or `Subscription` in AppDbContext.cs.
+Run:
+
+    grep -n "Firm\|firmId\|FirmId\|Subscription" src/LexCore.Infrastructure/Data/AppDbContext.cs
+
+If this returns any results, continue editing until it returns
+nothing. The only exception is if the literal string appears in
+a comment — delete those comments.
+
+====================================================================
+TASK 7 — MARK OBSOLETE ENUM VALUES
+====================================================================
+
+FILE: backend/src/LexCore.Domain/Enums/UserRole.cs
+
+CURRENT CONTENT:
+
+    namespace LexCore.Domain.Enums;
+
+    public enum UserRole
+    {
+        FirmAdmin = 1,
+        Lawyer = 2,
+        Client = 3,
+        SuperAdmin = 4
+    }
+
+REPLACE WITH:
+
+    namespace LexCore.Domain.Enums;
+
+    public enum UserRole
+    {
+        // [Obsolete] FirmAdmin is retained for backwards compatibility
+        // with any serialized audit log data. LexCore v1 is solo-only
+        // and no new user is created with this role.
+        [System.Obsolete("FirmAdmin role is deprecated in v1 solo-only. Do not use.")]
+        FirmAdmin = 1,
+
+        Lawyer = 2,
+
+        // [Obsolete] Client role is retained for backwards compatibility.
+        // LexCore v1 does not support client logins. Clients are stored
+        // as text data on the Case entity (clientName, clientPhone, etc.).
+        [System.Obsolete("Client role is deprecated in v1 solo-only. Do not use.")]
+        Client = 3,
+
+        SuperAdmin = 4
+    }
+
+====================================================================
+TASK 8 — CREATE AND APPLY EF MIGRATION
+====================================================================
+
+8.1 — Ensure EF Core tools are available
+
+Run from the solution root:
+
+    dotnet tool list --global
+
+If `dotnet-ef` is not listed, install it:
+
+    dotnet tool install --global dotnet-ef
+
+8.2 — Build the Domain and Infrastructure projects first
+
+The rest of the codebase is expected to be broken at this point.
+Only the Domain and Infrastructure projects need to build for the
+migration to be generated.
+
+Try:
+
+    dotnet build src/LexCore.Domain/LexCore.Domain.csproj
+
+This should succeed. If it fails, there is an unexpected
+reference from Domain to somewhere else. Investigate and fix
+before proceeding.
+
+Then:
+
+    dotnet build src/LexCore.Infrastructure/LexCore.Infrastructure.csproj
+
+This MAY fail because AuditService or other infrastructure services
+reference the deleted Firm type. If it fails with errors about Firm,
+Subscription, or FirmId — that is expected. Phase B will fix those.
+
+HOWEVER — we need the migration to be generated BEFORE Phase B.
+So we must get Infrastructure to build with just enough of the
+firm references removed from INFRASTRUCTURE SERVICES to allow the
+migration to run. Do NOT fix controllers or API layer.
+
+8.3 — Quick Infrastructure layer fix for build
+
+Search Infrastructure for any remaining Firm references:
+
+    grep -rn "Firm\|FirmId\|Subscription" src/LexCore.Infrastructure/ --include="*.cs"
+
+For each file in src/LexCore.Infrastructure/:
+  - If the reference is `FirmId` being set on an entity being
+    created — delete that line.
+  - If the reference is `user.Firm?.Name` or similar read-only
+    access — replace with `null` or an empty string, depending
+    on context.
+  - If the reference is a using statement for something that no
+    longer exists — delete the using.
+  - If the reference is to Subscription — delete the entire method
+    or line as appropriate.
+
+Specifically known Infrastructure files that will need touching
+(based on pre-audit):
+
+  - AuditService.cs: remove any FirmId assignment
+  - PdfService.cs: replace firm name/logo reads with constants
+  - RazorpayService.cs: the CreateSubscriptionAsync method
+    becomes unused after Phase C; for now, change its signature
+    to remove `Guid firmId` parameter OR leave it intact and
+    let Phase C delete its callers. Preferred: leave it intact.
+    The service is still registered in DI but no one calls it
+    after Phase C.
+  - SmartExtractService.cs: remove firmId parameter from any
+    method signature, replace internal usage with userId.
+  - DataSeeder.cs: delete any firm seeding. Only seed a SuperAdmin
+    user and done. If the entire seeder is firm-based, reduce it
+    to a no-op method that just returns Task.CompletedTask.
+  - HearingReminderJob.cs: remove any FirmId propagation from
+    notification creation. Replace with null.
+  - NotificationRepository.cs: if it scopes by firmId at all,
+    remove that branch.
+
+8.4 — Generate the migration
+
+Once Infrastructure builds, run from the solution root:
+
+    dotnet ef migrations add RemoveFirmsAndSubscriptions \
+      --project src/LexCore.Infrastructure \
+      --startup-project src/LexCore.API
+
+IMPORTANT: The --startup-project must point at the API project
+because AppDbContext's connection string lives in appsettings.
+
+If the command fails because the API project doesn't build —
+that's expected. Use this alternate approach:
+
+    dotnet ef migrations add RemoveFirmsAndSubscriptions \
+      --project src/LexCore.Infrastructure \
+      --context AppDbContext \
+      -- --environment Development
+
+If that also fails, create the migration MANUALLY:
+
+    Create file:
+    src/LexCore.Infrastructure/Migrations/<Timestamp>_RemoveFirmsAndSubscriptions.cs
+
+With a migration class that:
+  - In Up():
+      migrationBuilder.DropTable("Subscriptions");
+      migrationBuilder.DropTable("Firms");
+      Then for each of Case, User, Document, Hearing, Invoice,
+      Payment, Chat, AuditLog, Notification tables:
+          migrationBuilder.DropIndex("IX_<Table>_FirmId", "<Table>");
+          migrationBuilder.DropColumn("FirmId", "<Table>");
+  - In Down():
+      Can be left empty or throwing NotSupportedException. This
+      is a destructive one-way migration; rollback is not
+      supported. Add a comment explaining this.
+
+8.5 — Apply the migration
+
+Run:
+
+    dotnet ef database update \
+      --project src/LexCore.Infrastructure \
+      --startup-project src/LexCore.API
+
+If the startup project doesn't build, apply the migration via
+SQL directly: generate the SQL script first:
+
+    dotnet ef migrations script \
+      --project src/LexCore.Infrastructure \
+      --startup-project src/LexCore.API \
+      --output migration.sql
+
+Then pipe it to psql or run it manually in pgAdmin.
+
+8.6 — Verify the database state
+
+Connect to the PostgreSQL database and run:
+
+    \dt
+
+There should be NO Firms table. NO Subscriptions table.
+
+Then:
+
+    \d cases
+    \d users
+    \d invoices
+
+None of them should have a firm_id column.
+
+====================================================================
+TASK 9 — FINAL PHASE A CHECKLIST
+====================================================================
+
+Before reporting Phase A complete, verify ALL of the following:
+
+[ ] Firm.cs entity file deleted
+[ ] FirmDtos.cs file deleted
+[ ] Subscription.cs entity file deleted
+[ ] SubscriptionPlan.cs enum file deleted
+[ ] SubscriptionStatus.cs enum file deleted
+[ ] BaseEntity.cs no longer contains TenantEntity class
+[ ] All 9 domain entities inherit from BaseEntity (not TenantEntity)
+[ ] AppDbContext.cs has no Firm DbSet
+[ ] AppDbContext.cs has no Subscription DbSet
+[ ] AppDbContext.cs has no FirmId-related HasIndex calls
+[ ] AppDbContext.cs has no Firm navigation configuration calls
+[ ] UserRole.FirmAdmin marked [Obsolete]
+[ ] UserRole.Client marked [Obsolete]
+[ ] Migration RemoveFirmsAndSubscriptions created
+[ ] Migration applied to database
+[ ] Database has no Firms table
+[ ] Database has no Subscriptions table
+[ ] Database tables have no firm_id columns
+
+[ ] Run: grep -rn "Firm\b\|FirmId\|TenantEntity" src/LexCore.Domain/
+    Expected: only the Obsolete attribute on FirmAdmin enum and
+    possibly one literal "Firm" client type string in Case.cs.
+    ZERO matches for TenantEntity.
+
+[ ] Commit the work:
+    git add -A
+    git commit -m "Step 14-pre Phase A: domain + dbcontext cleanup for solo-lawyer v1"
+
+====================================================================
+WHAT TO REPORT BACK
+====================================================================
+
+When Phase A is done, report:
+  1. The exact list of files deleted (should be 5)
+  2. The exact list of files modified
+  3. The migration filename that was created
+  4. The output of `git status` and `git log --oneline -5`
+  5. The output of `grep -rn "Firm\b\|FirmId\|TenantEntity" src/LexCore.Domain/`
+  6. Whether the database was successfully updated
+  7. Any unexpected errors encountered
+
+DO NOT proceed to Phase B. Wait for user confirmation that Phase A
+is successful before running Phase B.
+
+The project will NOT build at the API level after Phase A. That is
+expected. Phase B will fix services/middleware. Phase C will fix
+controllers. The project will only compile cleanly after Phase C.
+
+====================================================================
+END OF PHASE A
+====================================================================

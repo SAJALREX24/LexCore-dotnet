@@ -44,21 +44,21 @@ public class ExceptionHandlerMiddleware
             KeyNotFoundException _ => new ApiResponse<object>
             {
                 Success = false,
-                Message = exception.Message,
+                Message = "The requested record was not found.",
                 Code = "NOT_FOUND",
                 StatusCode = (int)HttpStatusCode.NotFound
             },
             ArgumentException _ => new ApiResponse<object>
             {
                 Success = false,
-                Message = exception.Message,
+                Message = "Invalid request data.",
                 Code = "BAD_REQUEST",
                 StatusCode = (int)HttpStatusCode.BadRequest
             },
             InvalidOperationException _ => new ApiResponse<object>
             {
                 Success = false,
-                Message = exception.Message,
+                Message = "This operation cannot be completed.",
                 Code = "INVALID_OPERATION",
                 StatusCode = (int)HttpStatusCode.BadRequest
             },
